@@ -15,6 +15,9 @@ dependencies = [
 [project.optional-dependencies]
 vad = ["onnxruntime>=1.16"]
 stt = ["faster-whisper>=1.0"]
+speaker = ["sherpa-onnx>=1.10"]
+speaker-pyannote = ["pyannote.audio>=3.3"]
+samples = ["kokoro>=0.9", "misaki[ja]>=0.9"]
 dev = ["pytest>=8", "psutil>=5.9"]
 
 [project.scripts]

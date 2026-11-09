@@ -1,0 +1,18 @@
+# 段4：Silero VAD + faster-whisper + 話者分離（sherpa-onnx、トークン不要）
+run_name: full
+vad:
+  provider: silero
+  threshold: 0.5
+  min_silence_ms: 300
+  speech_pad_ms: 100
+  max_speech_s: 28
+stt:
+  provider: faster_whisper
+  model: large-v3
+  device: auto
+  language: ja
+speaker:
+  provider: acoustic       # sherpa-onnx。先に python -m intake models speaker
+  num_speakers: null       # 分かっていれば人数を入れる（null で自動）
+  threshold: 0.5           # 自動のとき：小さいほど話者が増える
+  device: cpu              # GPU は STT に譲る

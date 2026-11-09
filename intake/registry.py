@@ -19,7 +19,8 @@ PROVIDERS: dict[str, dict[str, str]] = {
     },
     "speaker": {
         "none": "intake.speaker.base:NoSpeaker",
-        "acoustic": "intake.speaker.acoustic:PyannoteSpeaker",
+        "acoustic": "intake.speaker.acoustic:SherpaSpeaker",
+        "acoustic_pyannote": "intake.speaker.acoustic:PyannoteSpeaker",
         "wearer": "intake.speaker.wearer:WearerSpeaker",
     },
 }

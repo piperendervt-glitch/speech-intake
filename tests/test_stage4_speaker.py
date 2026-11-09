@@ -38,3 +38,25 @@ def test_acoustic_assigns_by_overlap():
     assert out[1].speaker_conf == pytest.approx(0.9 / 1.4)
     tr = sp.drain_trace()
     assert [r["speaker"] for _, r in tr] == ["spk_1", "spk_2", "spk_1"]
+
+
+def test_sherpa_wraps_results():
+    from intake.speaker.acoustic import SherpaSpeaker
+
+    class Res(list):
+        def sort_by_start_time(self):
+            return sorted(self, key=lambda r: r.start)
+
+    class FakeD:
+        sample_rate = 16000
+
+        def process(self, x):
+            assert x.dtype == np.float32
+            return Res([NS(start=2.0, end=4.0, speaker=0), NS(start=0.0, end=2.0, speaker=1)])
+
+    sp = SherpaSpeaker(_diarizer=FakeD())
+    sp.feed(AudioChunk(0.0, np.zeros(64000, dtype=np.float32)))
+    out = sp.finalize([Utterance(id="utt_000000", session="20261109_000000", t0=0.2, t1=1.8),
+                       Utterance(id="utt_000001", session="20261109_000000", t0=2.2, t1=3.0)])
+    assert [u.speaker for u in out] == ["spk_1", "spk_2"]
+    assert sp.name.startswith("sherpa-onnx:")

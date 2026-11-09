@@ -6,6 +6,7 @@
   python -m intake sessions                                             セッション一覧
   python -m intake devices                                              入力デバイス一覧
   python -m intake view     [-c config.yaml]                            閲覧画面（http://127.0.0.1:8765）
+  python -m intake models   speaker|whisper|all                         モデルを models/ に取得
   python -m intake netcheck                                             待ち受けが localhost だけか確認
 """
 
@@ -129,6 +130,16 @@ def cmd_view(a, cfg, store):
     serve(cfg, store, open_browser=not a.no_browser)
 
 
+def cmd_models(a, cfg, store):  # noqa: ARG001
+    from .models import fetch_speaker, fetch_whisper  # noqa: PLC0415
+
+    root = Path(a.dir)
+    if a.what in ("speaker", "all"):
+        fetch_speaker(root)
+    if a.what in ("whisper", "all"):
+        fetch_whisper(a.whisper, root)
+
+
 def cmd_netcheck(a, cfg, store):  # noqa: ARG001
     from .netcheck import main as nc  # noqa: PLC0415
 
@@ -168,6 +179,11 @@ def main(argv=None):
 
     sub.add_parser("sessions", help="セッション一覧").set_defaults(fn=cmd_sessions)
     sub.add_parser("devices", help="入力デバイス一覧").set_defaults(fn=cmd_devices)
+    m = sub.add_parser("models", help="モデルを取得する（models/ に置く）")
+    m.add_argument("what", choices=["speaker", "whisper", "all"])
+    m.add_argument("--whisper", default="large-v3")
+    m.add_argument("--dir", default="models")
+    m.set_defaults(fn=cmd_models)
     sub.add_parser("netcheck", help="待ち受けが localhost だけか確かめる").set_defaults(fn=cmd_netcheck)
     v = sub.add_parser("view", help="閲覧画面")
     v.add_argument("--no-browser", action="store_true")

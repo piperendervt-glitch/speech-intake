@@ -6,7 +6,7 @@ stt:
   provider: faster_whisper
   model: large-v3
 speaker:
-  provider: acoustic       # wearer にすると装着者区間を外部から受け取る（docs/INTEGRATION_JA.md）
+  provider: acoustic       # sherpa-onnx（先に python -m intake models speaker）。wearer にすると装着者区間を外部から受け取る（docs/INTEGRATION_JA.md）
 sink:
   jsonl: true
   websocket:
