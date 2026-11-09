@@ -14,5 +14,5 @@ stt:
 speaker:
   provider: acoustic       # sherpa-onnx。先に python -m intake models speaker
   num_speakers: null       # 分かっていれば人数を入れる（null で自動）
-  threshold: 0.5           # 自動のとき：小さいほど話者が増える
+  threshold: 0.8           # 自動のとき：小さいほど話者が増える（試した結果 0.8。REPORT_段4）
   device: cpu              # GPU は STT に譲る

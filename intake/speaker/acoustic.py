@@ -101,7 +101,7 @@ class SherpaSpeaker(AcousticSpeaker):
         segmentation_model: str | None = None,
         embedding_model: str | None = None,
         num_speakers: int | None = None,
-        threshold: float = 0.5,
+        threshold: float = 0.8,
         min_duration_on: float = 0.3,
         min_duration_off: float = 0.5,
         num_threads: int = 2,
