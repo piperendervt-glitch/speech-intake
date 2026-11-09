@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "speech-intake/inference-0.1.json",
+  "$id": "speech-intake/inference-0.2.json",
   "title": "Inference (推察表の 1 行。利用側が書く)",
   "type": "object",
   "required": [

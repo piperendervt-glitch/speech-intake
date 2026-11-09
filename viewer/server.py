@@ -88,14 +88,52 @@ def make_app(cfg: dict[str, Any], store: SessionStore) -> web.Application:
         out = []
         for sid in store.list_sessions():
             runs = []
+            group = store.read_meta(sid).get("group")
             for r in store.list_runs(sid):
                 rd = store.run_dir(sid, r)
                 info = {}
                 if (rd / "run.json").exists():
                     info = json.loads((rd / "run.json").read_text(encoding="utf-8"))
-                runs.append({"run": r, "providers": info.get("providers"), "started_at": info.get("started_at")})
-            out.append({"session": sid, "meta": store.read_meta(sid), "runs": runs})
+                group = group or info.get("group")
+                runs.append({"run": r, "providers": info.get("providers"), "started_at": info.get("started_at"),
+                             "ref": info.get("ref")})
+            out.append({"session": sid, "meta": store.read_meta(sid), "runs": runs, "group": group})
         return web.json_response(out)
+
+    async def align_summary(req):
+        """群ごとの整列結果の集計（置換・脱落・挿入の対の数）。数えるだけで、合否は決めない。"""
+        run_name = req.query.get("run", "")
+        ref = req.query.get("ref", "ref")
+        group = req.query.get("group") or None
+        unit = req.query.get("unit", "phones")
+
+        def work():
+            per, pairs = [], {}
+            for sid in store.list_sessions():
+                runs = store.list_runs(sid)
+                cand = [run_name] if run_name in runs else [r for r in runs if (store.run_dir(sid, r) / "trace" / "phones_align.jsonl").exists()]
+                if not cand:
+                    continue
+                rows = [x for x in _read_jsonl(store.run_dir(sid, cand[0]) / "trace" / "phones_align.jsonl") if x.get("ref_run") == ref]
+                if not rows:
+                    continue
+                g = rows[0].get("group") or store.read_meta(sid).get("group")
+                if group and g != group:
+                    continue
+                cnt = dict.fromkeys(("match", "sub", "del", "ins"), 0)
+                for x in rows:
+                    ops = x["ops"] if unit == "phones" else x["words"]["ops"]
+                    for o in ops:
+                        cnt[o["op"]] += 1
+                        if o["op"] != "match":
+                            k = f"{o.get('ref') or '∅'}→{o.get('hyp') or '∅'}"
+                            pairs[k] = pairs.get(k, 0) + 1
+                label = store.read_meta(sid).get("label") or store.read_meta(sid).get("original") or ""
+                per.append({"session": sid, "run": cand[0], "group": g, "label": label, "counts": cnt})
+            top = sorted(pairs.items(), key=lambda kv: -kv[1])[:60]
+            return {"ref": ref, "group": group, "unit": unit, "sessions": per, "pairs": top}
+
+        return web.json_response(await asyncio.to_thread(work))
 
     async def peaks(req):
         sid = sid_of(req)
@@ -138,6 +176,7 @@ def make_app(cfg: dict[str, Any], store: SessionStore) -> web.Application:
     app.router.add_get("/api/sessions/{sid}/peaks", peaks)
     app.router.add_get("/api/sessions/{sid}/audio", audio)
     app.router.add_get("/api/sessions/{sid}/runs/{run}", run)
+    app.router.add_get("/api/align_summary", align_summary)
     app.router.add_static("/static", STATIC)
     return app
 

@@ -1,0 +1,26 @@
+# 段6：英語の発音を音素で観察する。Silero VAD + faster-whisper（英語固定）+ 音素認識
+# 先に：pip install -e .[phones]（torch は GPU 版を別に入れる。README）
+run_name: phones
+vad:
+  provider: silero
+  threshold: 0.5
+  min_silence_ms: 300
+  speech_pad_ms: 100
+  max_speech_s: 28
+stt:
+  provider: faster_whisper
+  model: large-v3
+  device: auto
+  language: en             # 英語固定
+  beam_size: 5
+  one_per_vad: true        # 音素は VAD 区間ごとに出すので、発話も区間ごとに 1 つにそろえる
+phones:
+  provider: wav2vec2_espeak   # 差し替え：allosaurus（REPORT_段6 に両者の違い）
+  model: facebook/wav2vec2-lv-60-espeak-cv-ft
+  device: auto             # auto: GPU があれば cuda（STT の後に使う）。GPU が足りなければ cpu
+  # allosaurus のとき:
+  # provider: allosaurus
+  # model: uni2005
+  # lang: eng              # eng = 英語の音素目録に絞る。ipa = 全言語共通
+speaker:
+  provider: none           # 一人の読み上げが主なので既定は付けない（full.yaml と同じ設定を足せば付く）

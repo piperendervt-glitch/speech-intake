@@ -10,6 +10,7 @@
 <header>
   <div class="row">
     <strong class="brand">speech-intake</strong>
+    <label title="参照 run の run.json の group（話者の属性）で絞る">群 <select id="group"><option value="">すべて</option></select></label>
     <label>セッション <select id="session"></select></label>
     <label>設定 A <select id="runA"></select></label>
     <label>設定 B（比較） <select id="runB"></select></label>
@@ -21,6 +22,13 @@
     <label><input type="checkbox" id="tText" checked> 文字</label>
     <label><input type="checkbox" id="tWords"> 単語時刻</label>
     <label><input type="checkbox" id="tSpk" checked> 話者の色分け</label>
+    <label title="単語の確率 p が低いほど濃く塗る（単語時刻の表示中）"><input type="checkbox" id="tWordP"> 単語の p を濃淡で</label>
+  </div>
+  <div class="row">
+    <label title="音素認識器の音素（時刻つき）と、参照の音素（整列後の位置）"><input type="checkbox" id="tPhones" checked> 音素</label>
+    <label>表記 <select id="phMode"><option value="ipa">元の IPA</option><option value="cls">粗いクラス</option></select></label>
+    <label title="人間の音声転写（ref）か、文字からの辞書変換（ref_g2p）か">参照 <select id="refKind"><option value="ref">human（ref）</option><option value="ref_g2p">g2p（ref_g2p）</option></select></label>
+    <span class="legend"><i class="op-match"></i>一致 <i class="op-sub"></i>置換 <i class="op-del"></i>脱落 <i class="op-ins"></i>挿入</span>
     <span class="sep"></span>
     <button id="zoomIn" title="拡大（ホイール）">＋</button>
     <button id="zoomOut" title="縮小（ホイール）">－</button>
@@ -34,9 +42,12 @@
   <div id="panels"></div>
   <p class="help muted">
     ホイール：拡大縮小／Shift+ホイール・ドラッグ：左右に移動／区間や文字をクリック：その部分を再生／
-    波形の何もない所をクリック：そこから再生／スペース：再生・停止／マウスを重ねると元のレコードを表示
+    波形の何もない所をクリック：そこから再生／スペース：再生・停止／マウスを重ねると元のレコードを表示／
+    音素をクリック：その音素の前後だけ再生
   </p>
+  <div id="aligns"></div>
   <div id="tables"></div>
+  <div id="summary"></div>
 </main>
 <div id="tip" hidden></div>
 <audio id="audio" preload="auto"></audio>

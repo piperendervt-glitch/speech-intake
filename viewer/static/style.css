@@ -2,12 +2,14 @@
   --bg: #fafaf8; --fg: #1d1d1f; --muted: #6b6b70; --line: #d8d8dc; --panel: #ffffff;
   --wave: #3a5f8f; --vad: rgba(46, 160, 67, 0.20); --vad-edge: #2ea043;
   --utt: #e8ecf3; --utt-edge: #8a9bb5; --play: #d1242f; --sel: #fff3bf;
+  --op-match: #c9d6c3; --op-sub: #f08c00; --op-del: #e03131; --op-ins: #7048e8; --op-none: #dde3ec; --lowp: 224, 49, 49;
 }
 @media (prefers-color-scheme: dark) {
   :root {
     --bg: #161618; --fg: #e8e8ea; --muted: #9a9aa0; --line: #34343a; --panel: #1e1e21;
     --wave: #7fa6d9; --vad: rgba(63, 185, 80, 0.22); --vad-edge: #3fb950;
     --utt: #2a2f3a; --utt-edge: #5d6b82; --play: #ff6b6b; --sel: #4a4320;
+    --op-match: #34483a; --op-sub: #d9480f; --op-del: #f03e3e; --op-ins: #845ef7; --op-none: #2f3542; --lowp: 255, 107, 107;
   }
 }
 * { box-sizing: border-box; }
@@ -39,3 +41,22 @@ td.num { font-family: ui-monospace, Consolas, monospace; white-space: nowrap; }
 tr.utt { cursor: pointer; }
 tr.utt:hover, tr.utt.playing { background: var(--sel); }
 .swatch { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 4px; vertical-align: -1px; }
+.legend { display: inline-flex; gap: 6px; align-items: center; font-size: 12px; }
+.legend i, .tok i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; }
+.op-match { background: var(--op-match); } .op-sub { background: var(--op-sub); }
+.op-del { background: var(--op-del); } .op-ins { background: var(--op-ins); }
+.seq { display: flex; flex-wrap: wrap; gap: 2px; margin: 4px 0 8px; }
+.tok { display: inline-flex; flex-direction: column; align-items: center; min-width: 18px; padding: 1px 3px; border-radius: 4px;
+  font: 12px/1.25 ui-monospace, Consolas, "Segoe UI Symbol", monospace; cursor: pointer; border: 1px solid transparent; }
+.tok.op-match { background: transparent; border-color: var(--line); }
+.tok.op-sub, .tok.op-del, .tok.op-ins { color: #fff; }
+.tok .r { opacity: .85; } .tok .h { font-weight: 600; }
+.tok .w { font-size: 10px; opacity: .7; }
+.wseq { display: flex; flex-wrap: wrap; gap: 3px; margin: 2px 0 6px; font-size: 13px; }
+.wseq span { padding: 0 4px; border-radius: 4px; cursor: pointer; }
+.wseq .op-match { background: transparent; }
+.wseq .op-sub, .wseq .op-del, .wseq .op-ins { color: #fff; }
+.counts { font-size: 12px; }
+#aligns, #summary { margin: 10px 0; }
+#aligns details, #summary details { margin-bottom: 10px; }
+.bar { display: inline-block; height: 8px; background: var(--op-sub); vertical-align: middle; border-radius: 2px; }

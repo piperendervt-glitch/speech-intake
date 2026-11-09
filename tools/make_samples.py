@@ -3,6 +3,8 @@
   python tools/make_samples.py --engine kokoro   # 既定。自然な声（要: pip install "kokoro>=0.9" "misaki[ja]"、初回にモデルを取得）
   python tools/make_samples.py --engine espeak   # 機械的な声（要: espeak-ng）。開発中の動作確認用
   python tools/make_samples.py --name conv5_ja --speakers 3   # Kokoro の 5 種類の声で 3〜5 人の打ち合わせ
+  python tools/make_samples.py --name en_read      # 英語の読み上げ（段6・7。要: pip install "misaki[en]"）
+  python tools/make_samples.py --name en_misread   # 同じ文を、わざと誤読させて読む（rice→lice など。text は本来の文）
 
 出力:
   samples/<name>.wav          16 kHz mono
@@ -57,8 +59,23 @@ SCRIPTS = {
     ],
 }
 
+# 英語の読み上げ（段6・7）。(本来の文, わざと誤読させた読み)。誤読は日本語話者に多いと言われる対を選んだ
+EN_LINES = [
+    ("I would like some rice with my dinner.", "I would like some lice with my dinner."),
+    ("The light in the hall is very bright.", "The right in the hall is berry bright."),
+    ("I think the sea is calm today.", "I sink the she is calm today."),
+    ("Please read the first line of the letter.", "Please lead the first line of the retter."),
+    ("She works at the bank near the park.", "She walks at the bank near the pork."),
+    ("Thank you for the beautiful flowers.", "Sank you for the beautiful flowers."),
+]
+SCRIPTS["en_read"] = [("A", t, 0.6, t) for t, _ in EN_LINES]
+SCRIPTS["en_misread"] = [("A", t, 0.6, m) for t, m in EN_LINES]
+LANG = {"en_read": "a", "en_misread": "a"}  # Kokoro の言語（a = 米国英語）。無ければ日本語
+
 KOKORO_VOICES = {"A": "jf_alpha", "B": "jm_kumo", "C": "jf_gongitsune", "D": "jf_nezumi", "E": "jf_tebukuro"}
+KOKORO_VOICES_EN = {"A": "af_heart", "B": "am_michael"}
 ESPEAK_VOICES = {"A": ("ja", 70), "B": ("ja", 25)}  # (voice, pitch)
+ESPEAK_VOICES_EN = {"A": ("en-us", 50), "B": ("en-us", 25)}
 
 
 def _resample(x: np.ndarray, sr: int) -> np.ndarray:
@@ -74,8 +91,8 @@ def _resample(x: np.ndarray, sr: int) -> np.ndarray:
     return np.interp(np.linspace(0, len(x) - 1, n), np.arange(len(x)), x).astype(np.float32)
 
 
-def tts_espeak(spk: str, text: str) -> np.ndarray:
-    voice, pitch = ESPEAK_VOICES[spk]
+def tts_espeak(spk: str, text: str, lang: str = "j") -> np.ndarray:
+    voice, pitch = (ESPEAK_VOICES_EN if lang == "a" else ESPEAK_VOICES)[spk]
     with tempfile.TemporaryDirectory() as d:
         p = Path(d) / "o.wav"
         subprocess.run(["espeak-ng", "-v", voice, "-p", str(pitch), "-s", "150", "-w", str(p), text], check=True)
@@ -83,16 +100,16 @@ def tts_espeak(spk: str, text: str) -> np.ndarray:
     return _resample(x, sr)
 
 
-_kpipe = None
+_kpipe: dict = {}
 
 
-def tts_kokoro(spk: str, text: str) -> np.ndarray:
-    global _kpipe
-    if _kpipe is None:
+def tts_kokoro(spk: str, text: str, lang: str = "j") -> np.ndarray:
+    if lang not in _kpipe:
         from kokoro import KPipeline  # noqa: PLC0415
 
-        _kpipe = KPipeline(lang_code="j")
-    parts = [a.cpu().numpy() if hasattr(a, "cpu") else np.asarray(a) for _, _, a in _kpipe(text, voice=KOKORO_VOICES[spk])]
+        _kpipe[lang] = KPipeline(lang_code=lang)
+    voice = (KOKORO_VOICES_EN if lang == "a" else KOKORO_VOICES)[spk]
+    parts = [a.cpu().numpy() if hasattr(a, "cpu") else np.asarray(a) for _, _, a in _kpipe[lang](text, voice=voice)]
     return _resample(np.concatenate(parts), 24000)
 
 
@@ -101,15 +118,16 @@ def build(name: str, engine: str, out: Path, speakers: int | None = None) -> Non
     track = np.zeros(0, dtype=np.float32)
     cursor = 0.0
     lines = []
-    script = SCRIPTS[name]
+    lang = LANG.get(name, "j")
+    script = [(x[0], x[1], x[2], x[3] if len(x) > 3 else x[1]) for x in SCRIPTS[name]]  # (話者, 本来の文, 間, 読ませる文)
     if speakers:  # 先頭から speakers 人だけを残す（それ以外の人の台詞は、残る人に順に振り直す）
         keep = sorted({s for s, _, _ in script})[:speakers]
-        script = [(s if s in keep else keep[i % len(keep)], t, g) for i, (s, t, g) in enumerate(script)]
+        script = [(s if s in keep else keep[i % len(keep)], t, g, y) for i, (s, t, g, y) in enumerate(script)]
         name = f"{name[:-3] if name.endswith('_ja') else name}_{speakers}p"
-    if engine == "espeak" and {s for s, _, _ in script} - set(ESPEAK_VOICES):
+    if engine == "espeak" and {s for s, *_ in script} - set(ESPEAK_VOICES):
         raise SystemExit("espeak は 2 人の会話だけ")
-    for spk, text, gap in script:
-        x = tts(spk, text)
+    for spk, text, gap, say in script:
+        x = tts(spk, say, lang)
         x = 0.8 * x / (np.max(np.abs(x)) + 1e-9)
         t0 = max(0.0, cursor + gap)
         a = int(t0 * SR)
@@ -118,14 +136,19 @@ def build(name: str, engine: str, out: Path, speakers: int | None = None) -> Non
             track = np.concatenate([track, np.zeros(need - len(track), dtype=np.float32)])
         track[a:need] += x
         t1 = t0 + len(x) / SR
-        lines.append({"speaker": spk, "text": text, "t0": round(t0, 3), "t1": round(t1, 3)})
+        ln = {"speaker": spk, "text": text, "t0": round(t0, 3), "t1": round(t1, 3)}
+        if say != text:
+            ln["say"] = say  # TTS に実際に読ませた文（text は本来の文。参照 run の G2P は text から作る）
+        lines.append(ln)
         cursor = max(cursor, t1)
     track = np.concatenate([track, np.zeros(int(0.8 * SR), dtype=np.float32)])
     track = np.clip(track, -1, 1)
     out.mkdir(parents=True, exist_ok=True)
     stem = f"{name}_{engine}"
     sf.write(out / f"{stem}.wav", track, SR, subtype="PCM_16")
-    meta = {"name": stem, "engine": engine, "voices": {k: v for k, v in (KOKORO_VOICES if engine == "kokoro" else ESPEAK_VOICES).items() if k in {s for s, _, _ in script}},
+    vs = (KOKORO_VOICES_EN if lang == "a" else KOKORO_VOICES) if engine == "kokoro" else (ESPEAK_VOICES_EN if lang == "a" else ESPEAK_VOICES)
+    meta = {"name": stem, "engine": engine, "lang": "en" if lang == "a" else "ja",
+            "voices": {k: v for k, v in vs.items() if k in {s for s, *_ in script}},
             "note": "t0/t1 は合成時に台詞を置いた時刻（台詞の前後の無音も含む）", "lines": lines}
     (out / f"{stem}.script.json").write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
     print(out / f"{stem}.wav", f"{len(track) / SR:.1f}s")

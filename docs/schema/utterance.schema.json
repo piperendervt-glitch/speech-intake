@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "speech-intake/utterance-0.1.json",
+  "$id": "speech-intake/utterance-0.2.json",
   "title": "Utterance (観察表の 1 行)",
   "type": "object",
   "required": [
@@ -98,6 +98,63 @@
         "string",
         "null"
       ]
+    },
+    "phones": {
+      "type": "array",
+      "description": "schema 0.2。どう発音されたか（音素列）。欄が無ければ空として読む",
+      "items": {
+        "type": "object",
+        "required": [
+          "ph"
+        ],
+        "properties": {
+          "ph": {
+            "type": "string",
+            "minLength": 1,
+            "description": "IPA 文字列"
+          },
+          "t0": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "minimum": 0,
+            "description": "セッション秒。参照（human/g2p）では null のことがある"
+          },
+          "t1": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "minimum": 0
+          },
+          "p": {
+            "type": "number",
+            "description": "認識器が出した確率の転記"
+          },
+          "w": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "参照だけ：text を空白で切った何番目の語か"
+          }
+        }
+      }
+    },
+    "phones_model": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "音素認識器の名前（例 wav2vec2-lv-60-espeak-cv-ft）"
+    },
+    "phones_source": {
+      "enum": [
+        "model",
+        "human",
+        "g2p",
+        "none"
+      ],
+      "description": "model=認識器（観察）。human=人間の転写、g2p=辞書変換（どちらも参照 run だけに入る）"
     }
   }
 }

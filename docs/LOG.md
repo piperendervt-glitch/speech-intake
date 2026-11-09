@@ -12,3 +12,7 @@
 | 2026-11-09 07:42 | kokoro・misaki[ja]（PyPI）と Kokoro-82M（HuggingFace hexgrad/Kokoro-82M, 約 330 MB）・日本語辞書 | samples/conv2_ja_kokoro.wav を作る | 10 分程度 | 成功（07:44〜07:45）。misaki[ja] は入ったが、別に `python -m unidic download`（cotonoha-dic S3, unidic 3.1.0）が要った（無いと fugashi が mecabrc 無しで落ちる）。43.7 秒の wav を生成 |
 | 2026-11-09 07:46 | faster-whisper large-v3-turbo（HuggingFace, 約 1.6 GB） | turbo と large-v3 の比較（run full_turbo） | 数分 | 成功（07:45, 初回の full_turbo 実行の中で自動取得。1 分未満） |
 | 2026-11-09 07:46 | faster-whisper small（HuggingFace, 約 500 MB） | 段5 の WebSocket 配信確認（stream.yaml, stt.model=small） | 1〜2 分 | 取得不要（この PC の HuggingFace キャッシュに既にあった。07:48 に 1 秒で完了） |
+| 2026-11-09 14:10 | transformers・huggingface_hub（PyPI）と wav2vec2-lv-60-espeak-cv-ft（HuggingFace facebook/…, 約 1.3 GB, トークン不要） | 段6 の音素認識（phones.provider=wav2vec2_espeak） | 5〜10 分 | （ユーザーの PC で実行） |
+| 2026-11-09 14:10 | allosaurus（PyPI。依存に panphon・resampy など）と uni2005 モデル（約 20 MB, 初回実行時に allosaurus が取得） | 段6 の音素認識（phones.provider=allosaurus） | 数分 | （ユーザーの PC で実行） |
+| 2026-11-09 14:10 | g2p_en（PyPI）と NLTK の cmudict・品詞タグ付けデータ（数 MB、初回 import 時に取得） | 段7 の参照 run ref_g2p | 1〜2 分 | （ユーザーの PC で実行） |
+| 2026-11-09 14:10 | misaki[en]（PyPI。spacy と en_core_web_sm 約 13 MB）・Kokoro の英語の声 af_heart | 段6・7 の英語合成サンプル（samples/en_read_kokoro.wav, en_misread_kokoro.wav） | 数分 | （ユーザーの PC で実行） |

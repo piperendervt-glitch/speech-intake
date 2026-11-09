@@ -85,7 +85,8 @@ def test_cli_import_replay_writes_run(tmp_path, wav_file, capsys):
     rd = tmp_path / "s" / sid / "runs" / "r1"
     assert (rd / "utterances.jsonl").exists()
     info = json.loads((rd / "run.json").read_text(encoding="utf-8"))
-    assert info["providers"] == {"vad": "none", "stt": "none", "speaker": "none"}
+    assert info["providers"] == {"vad": "none", "stt": "none", "speaker": "none", "phones": "none"}
+    assert info["schema_version"] == "0.2"
 
 
 def test_non_local_host_refused():

@@ -23,11 +23,16 @@ PROVIDERS: dict[str, dict[str, str]] = {
         "acoustic_pyannote": "intake.speaker.acoustic:PyannoteSpeaker",
         "wearer": "intake.speaker.wearer:WearerSpeaker",
     },
+    "phones": {
+        "none": "intake.phones.base:NoPhones",
+        "wav2vec2_espeak": "intake.phones.wav2vec2_espeak:Wav2Vec2EspeakPhones",
+        "allosaurus": "intake.phones.allo:AllosaurusPhones",
+    },
 }
 
 
 def create(stage: str, cfg: dict[str, Any], **kw: Any) -> Any:
-    sec = dict(cfg.get(stage) or {})
+    sec = dict(cfg.get(stage) or {"provider": "none"})
     name = sec.pop("provider", "none")
     try:
         target = PROVIDERS[stage][name]

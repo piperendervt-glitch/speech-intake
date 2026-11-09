@@ -1,0 +1,183 @@
+# 粗い音素クラスの対応表（ユーザーが直してよい）。
+#
+# 認識器の IPA・人間の狭い IPA（補助記号つき）・G2P の出力（ARPAbet / IPA）を、同じ粗いクラスに丸める。
+# クラスの名前は ARPAbet の 39 音素に、弾き音 DX と声門閉鎖 Q を足した 41 個。
+#
+# 手順（intake/phones/classes.py）:
+#   1. 補助記号（長音 ː、有気 ʰ、鼻音化 ̃、強勢 ˈ ˌ など）を落とす（drop に並べたもの＋Unicode の結合文字）
+#   2. ipa の表を「長いものから」当てる（二重母音 aɪ・破擦音 tʃ を 1 クラスに寄せる）
+#   3. 値に空白があれば複数のクラスに展開する（例 ts → T S）
+#   4. 表に無い記号は "?" + 元の記号 のまま残す（隠さない）
+#
+# ARPAbet（g2p_en の出力）は強勢の数字（AH0 の 0）を落として arpabet の表を引く。
+
+classes: [AA, AE, AH, AO, AW, AY, B, CH, D, DH, DX, EH, ER, EY, F, G, HH, IH, IY, JH, K, L, M, N, NG,
+          OW, OY, P, Q, R, S, SH, T, TH, UH, UW, V, W, Y, Z, ZH]
+
+# 落とす補助記号（結合文字 U+0300–U+036F は表に無くても落とす）
+drop: ["ː", "ˑ", "ˈ", "ˌ", "ʰ", "ʲ", "ʷ", "ˠ", "ˤ", "ⁿ", "ˡ", "ʼ", "˞", "͡", "͜", ".", "‿", "-", "'", "_", "(", ")", "[", "]", "/"]
+
+ipa:
+  # 母音（単母音）
+  ɑ: AA
+  a: AA
+  ɒ: AA
+  ä: AA
+  æ: AE
+  ʌ: AH
+  ə: AH
+  ɐ: AH
+  ɘ: AH
+  ɵ: AH
+  ɔ: AO
+  ɛ: EH
+  e: EH
+  ɜ: ER
+  ɝ: ER
+  ɚ: ER
+  ɪ: IH
+  ᵻ: IH
+  ɨ: IH
+  ʏ: IH
+  i: IY
+  y: IY
+  ʊ: UH
+  ʉ: UW
+  u: UW
+  ɯ: UW
+  o: OW
+  ø: EH
+  œ: EH
+  # 二重母音（1 クラスに寄せる）
+  aɪ: AY
+  ɑɪ: AY
+  äɪ: AY
+  ʌɪ: AY
+  aʊ: AW
+  æʊ: AW
+  ɑʊ: AW
+  eɪ: EY
+  ɛɪ: EY
+  ei: EY
+  oʊ: OW
+  əʊ: OW
+  ou: OW
+  ɔɪ: OY
+  ai: AY
+  au: AW
+  oi: OY
+  oɪ: OY
+  # r 音化した母音の書き方の揺れ
+  ɜɹ: ER
+  əɹ: ER
+  # 子音
+  p: P
+  b: B
+  t: T
+  d: D
+  k: K
+  ɡ: G
+  g: G
+  ʔ: Q
+  ɾ: DX
+  ɽ: DX
+  f: F
+  ɸ: F
+  v: V
+  β: V
+  θ: TH
+  ð: DH
+  s: S
+  z: Z
+  ʃ: SH
+  ɕ: SH
+  ʂ: SH
+  ʒ: ZH
+  ʑ: ZH
+  ʐ: ZH
+  h: HH
+  ɦ: HH
+  ç: HH
+  x: HH
+  χ: HH
+  m: M
+  ɱ: M
+  n: N
+  ɲ: N
+  ɴ: N
+  ŋ: NG
+  l: L
+  ɫ: L
+  ɭ: L
+  ʎ: L
+  ɹ: R
+  r: R
+  ɻ: R
+  ʁ: R
+  ʀ: R
+  w: W
+  ʍ: W
+  ɰ: W
+  j: Y
+  # 破擦音（1 クラスに寄せる）
+  tʃ: CH
+  tɕ: CH
+  ʧ: CH
+  dʒ: JH
+  dʑ: JH
+  ʤ: JH
+  # 英語のクラスに 1 つでは寄せられないもの（複数に展開）
+  ts: T S
+  dz: D Z
+
+arpabet:
+  AA: AA
+  AE: AE
+  AH: AH
+  AO: AO
+  AW: AW
+  AX: AH
+  AXR: ER
+  AY: AY
+  B: B
+  CH: CH
+  D: D
+  DH: DH
+  DX: DX
+  EH: EH
+  EL: AH L
+  EM: AH M
+  EN: AH N
+  ER: ER
+  EY: EY
+  F: F
+  G: G
+  HH: HH
+  IH: IH
+  IX: IH
+  IY: IY
+  JH: JH
+  K: K
+  L: L
+  M: M
+  N: N
+  NG: NG
+  NX: N
+  OW: OW
+  OY: OY
+  P: P
+  Q: Q
+  R: R
+  S: S
+  SH: SH
+  T: T
+  TH: TH
+  UH: UH
+  UW: UW
+  UX: UW
+  V: V
+  W: W
+  WH: W
+  Y: Y
+  Z: Z
+  ZH: ZH
