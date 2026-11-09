@@ -22,8 +22,10 @@ def listening_sockets() -> list[dict]:
             cmd = " ".join(p.info["cmdline"] or [])
             if "intake" not in cmd or p.pid == os.getpid():
                 continue
-            for c in p.net_connections(kind="inet"):
-                if c.status == psutil.CONN_LISTEN:
+            for c in p.net_connections(kind="tcp"):
+                # Windows の一部のビルドでは待ち受けソケットの状態が LISTEN でなく NONE で返る。
+                # 相手の無い TCP ソケットは待ち受けとみなす（見落とすより多めに出す）
+                if c.status == psutil.CONN_LISTEN or (c.status == psutil.CONN_NONE and not c.raddr):
                     out.append({"pid": p.pid, "cmd": cmd[:80], "addr": c.laddr.ip, "port": c.laddr.port})
         except (psutil.NoSuchProcess, psutil.AccessDenied):
             continue
