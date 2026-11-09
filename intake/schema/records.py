@@ -14,7 +14,7 @@ SCHEMA_VERSION = "0.1"
 
 UTT_ID_RE = re.compile(r"^utt_\d{6,}$")
 SESSION_RE = re.compile(r"^\d{8}_\d{6}(?:_[A-Za-z0-9-]+)?$")
-SPEAKER_SOURCES = ("acoustic", "wearer", "face", "none")
+SPEAKER_SOURCES = ("acoustic", "wearer", "face", "script", "none")  # script = 合成サンプルの台本（正解）
 
 
 class SchemaError(ValueError):

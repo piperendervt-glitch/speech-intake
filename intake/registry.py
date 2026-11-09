@@ -15,9 +15,12 @@ PROVIDERS: dict[str, dict[str, str]] = {
     },
     "stt": {
         "none": "intake.stt.base:NoStt",
+        "faster_whisper": "intake.stt.faster_whisper:FasterWhisperStt",
     },
     "speaker": {
         "none": "intake.speaker.base:NoSpeaker",
+        "acoustic": "intake.speaker.acoustic:PyannoteSpeaker",
+        "wearer": "intake.speaker.wearer:WearerSpeaker",
     },
 }
 

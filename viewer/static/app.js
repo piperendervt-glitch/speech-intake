@@ -4,7 +4,7 @@
 const $ = (id) => document.getElementById(id);
 const css = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
 const SPK_COLORS = ["#e8590c", "#1c7ed6", "#2f9e44", "#ae3ec9", "#f59f00", "#0ca678", "#d6336c", "#5c7cfa"];
-const LANES = { wave: 110, spk: 18, text: 46, words: 38 };
+const LANES = { wave: 110, spk: 28, text: 46, words: 38 };
 
 const S = {
   sessions: [],
@@ -89,7 +89,10 @@ async function loadRun(idx) {
 
 function indexSpeakers() {
   const names = new Set();
-  for (const r of S.runs) if (r) for (const u of r.utterances) if (u.speaker) names.add(u.speaker);
+  for (const r of S.runs) if (r) {
+    for (const u of r.utterances) if (u.speaker) names.add(u.speaker);
+    for (const t of (r.trace.speaker || [])) names.add(t.speaker);
+  }
   S.spkIndex = {};
   [...names].sort().forEach((n, i) => (S.spkIndex[n] = SPK_COLORS[i % SPK_COLORS.length]));
 }
@@ -415,17 +418,25 @@ function drawPanel(cv, layout) {
     if (!r) continue;
     if (L.key === "spk") {
       ctx.font = "11px system-ui, sans-serif";
+      // 上の細い帯：話者分離そのものの結果（trace/speaker.jsonl）。下の帯：発話レコードに付いた話者
+      for (const t of (r.trace.speaker || [])) {
+        if (!visible(t.t0, t.t1)) continue;
+        const x0 = tToX(t.t0, w), x1 = tToX(t.t1, w);
+        ctx.fillStyle = S.spkIndex[t.speaker] || "#888";
+        ctx.fillRect(x0, L.y + 2, Math.max(1, x1 - x0), 5);
+        hits.push({ x0, x1, y0: L.y, y1: L.y + 8, t0: t.t0, t1: t.t1, rec: t, kind: "話者分離の区間" });
+      }
       for (const u of r.utterances) {
         if (!u.speaker || !visible(u.t0, u.t1)) continue;
         const x0 = tToX(u.t0, w), x1 = tToX(u.t1, w);
         ctx.fillStyle = S.spkIndex[u.speaker] || "#888";
         ctx.globalAlpha = u.speaker_conf != null ? 0.35 + 0.65 * u.speaker_conf : 1;
-        ctx.fillRect(x0, L.y + 3, Math.max(1, x1 - x0), L.h - 6);
+        ctx.fillRect(x0, L.y + 10, Math.max(1, x1 - x0), L.h - 12);
         ctx.globalAlpha = 1;
         ctx.fillStyle = "#fff";
         const label = clipText(ctx, u.speaker, x1 - x0 - 4);
         if (label) ctx.fillText(label, x0 + 2, L.y + L.h - 5);
-        hits.push({ x0, x1, y0: L.y, y1: L.y + L.h, t0: u.t0, t1: u.t1, rec: u, kind: "発話レコード" });
+        hits.push({ x0, x1, y0: L.y + 9, y1: L.y + L.h, t0: u.t0, t1: u.t1, rec: u, kind: "発話レコード" });
       }
     }
     if (L.key === "text") {

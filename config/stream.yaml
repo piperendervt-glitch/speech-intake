@@ -1,0 +1,15 @@
+# 段5：VAD + STT + 話者分離を流しながら WebSocket で配信する（ライブ録音の例）
+run_name: stream
+vad:
+  provider: silero
+stt:
+  provider: faster_whisper
+  model: large-v3
+speaker:
+  provider: acoustic       # wearer にすると装着者区間を外部から受け取る（docs/INTEGRATION_JA.md）
+sink:
+  jsonl: true
+  websocket:
+    enabled: true
+    host: 127.0.0.1
+    port: 8766

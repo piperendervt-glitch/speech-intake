@@ -18,7 +18,7 @@ UTTERANCE_JSON_SCHEMA = {
         "lang": {"type": ["string", "null"]},
         "speaker": {"type": ["string", "null"]},
         "speaker_conf": {"type": ["number", "null"], "minimum": 0, "maximum": 1},
-        "speaker_source": {"enum": ["acoustic", "wearer", "face", "none"]},
+        "speaker_source": {"enum": ["acoustic", "wearer", "face", "script", "none"]},
         "words": {
             "type": "array",
             "items": {

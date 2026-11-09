@@ -22,26 +22,50 @@ from .config import load_config
 from .session import SessionStore, new_session_id
 
 
-def _sink(cfg, store: SessionStore, sid: str, run: str):
-    from .sink import JsonlSink, MultiSink  # noqa: PLC0415
+_WS = None
 
-    sinks = [JsonlSink(store.run_dir(sid, run))] if cfg["sink"].get("jsonl", True) else []
+
+def _ws(cfg):
+    """WebSocket 配信は 1 回のコマンドで 1 つだけ立てる（複数セッションを流しても同じ口で配る）。"""
+    global _WS
     ws = cfg["sink"].get("websocket") or {}
-    if ws.get("enabled"):
+    if not ws.get("enabled"):
+        return None
+    if _WS is None:
         from .sink.websocket import WebSocketSink  # noqa: PLC0415
 
-        sinks.append(WebSocketSink(host=ws["host"], port=int(ws["port"])))
-    return MultiSink(sinks)
+        _WS = WebSocketSink(host=ws["host"], port=int(ws["port"]))
+        print(f"[intake] 配信中 ws://{ws['host']}:{ws['port']}/ws", file=sys.stderr)
+    return _WS
 
 
 def _run(cfg, store, sid, run, source, chunks):
     from .pipeline import Pipeline  # noqa: PLC0415
+    from .sink import JsonlSink, MultiSink  # noqa: PLC0415
 
-    p = Pipeline(cfg, sid, _sink(cfg, store, sid, run), run_name=run)
+    sinks = [JsonlSink(store.run_dir(sid, run))] if cfg["sink"].get("jsonl", True) else []
+    ws = _ws(cfg)
+    if ws:
+        sinks.append(ws)
+    cfg = {**cfg, "_session_dir": str(store.dir(sid))}
+    p = Pipeline(cfg, sid, MultiSink(sinks), run_name=run)
+    if ws:  # 購読側から届く装着者区間などを speaker provider に渡す
+        ws.on_message = getattr(p.speaker, "on_message", None)
     print(f"[intake] session={sid} run={run} vad={p.vad.name} stt={p.stt.name} speaker={p.speaker.name}", file=sys.stderr)
     stats = p.run(chunks, source)
     print(json.dumps({"session": sid, "run": run, **stats}, ensure_ascii=False))
     return stats
+
+
+def _hold(a):
+    if _WS is not None and getattr(a, "hold", False):
+        print("[intake] 配信を続けている。Ctrl+C で終わる", file=sys.stderr)
+        try:
+            threading.Event().wait()
+        except KeyboardInterrupt:
+            pass
+    if _WS is not None:
+        _WS.shutdown()
 
 
 def cmd_record(a, cfg, store):
@@ -57,15 +81,22 @@ def cmd_record(a, cfg, store):
         threading.Timer(a.seconds, cap.stop).start()
     print(f"[intake] 録音中… Ctrl+C で止める → {store.audio_path(sid)}", file=sys.stderr)
     _run(cfg, store, sid, a.run or cfg["run_name"], "mic", cap.chunks())
+    signal.signal(signal.SIGINT, signal.default_int_handler)
+    _hold(a)
 
 
-def cmd_replay(a, cfg, store):
+def _replay_one(a, cfg, store, sid):
     from .replay import WavReplay  # noqa: PLC0415
 
     speed = a.speed or cfg["replay"]["speed"]
+    rp = WavReplay(store, sid, speed=speed, chunk_ms=cfg["replay"]["chunk_ms"])
+    _run(cfg, store, sid, a.run or cfg["run_name"], f"replay:{speed}", rp.chunks())
+
+
+def cmd_replay(a, cfg, store):
     for sid in a.session:
-        rp = WavReplay(store, sid, speed=speed, chunk_ms=cfg["replay"]["chunk_ms"])
-        _run(cfg, store, sid, a.run or cfg["run_name"], f"replay:{speed}", rp.chunks())
+        _replay_one(a, cfg, store, sid)
+    _hold(a)
 
 
 def cmd_import(a, cfg, store):
@@ -75,8 +106,8 @@ def cmd_import(a, cfg, store):
         sid = import_audio(store, f, sample_rate=cfg["sample_rate"], label=a.label)
         print(sid)
         if a.replay:
-            a2 = argparse.Namespace(session=[sid], speed=a.speed, run=a.run)
-            cmd_replay(a2, cfg, store)
+            _replay_one(a, cfg, store, sid)
+    _hold(a)
 
 
 def cmd_sessions(a, cfg, store):  # noqa: ARG001
@@ -116,12 +147,14 @@ def main(argv=None):
     r.add_argument("--seconds", type=float)
     r.add_argument("--session")
     r.add_argument("--run")
+    r.add_argument("--hold", action="store_true", help="終わった後も WebSocket 配信を続ける")
     r.set_defaults(fn=cmd_record)
 
     p = sub.add_parser("replay", help="保存した録音を流し直す")
     p.add_argument("session", nargs="+")
     p.add_argument("--run", help="結果を置く run 名（設定の run_name を上書き）")
     p.add_argument("--speed", choices=["fast", "realtime"])
+    p.add_argument("--hold", action="store_true", help="終わった後も WebSocket 配信を続ける")
     p.set_defaults(fn=cmd_replay)
 
     i = sub.add_parser("import", help="外部の音声ファイルをセッションにする")
@@ -130,6 +163,7 @@ def main(argv=None):
     i.add_argument("--replay", action="store_true", help="取り込み後に続けて流し直す")
     i.add_argument("--run")
     i.add_argument("--speed", choices=["fast", "realtime"])
+    i.add_argument("--hold", action="store_true", help="終わった後も WebSocket 配信を続ける")
     i.set_defaults(fn=cmd_import)
 
     sub.add_parser("sessions", help="セッション一覧").set_defaults(fn=cmd_sessions)

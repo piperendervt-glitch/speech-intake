@@ -49,6 +49,11 @@ class JsonlSink:
         tmp.replace(self.path)
         self._f = self.path.open("a", encoding="utf-8")
 
+    def end(self, stats: dict[str, Any]) -> None:
+        info = json.loads((self.dir / "run.json").read_text(encoding="utf-8"))
+        info["stats"] = stats
+        (self.dir / "run.json").write_text(json.dumps(info, ensure_ascii=False, indent=2), encoding="utf-8")
+
     def close(self) -> None:
         self._f.close()
         for f in self._traces.values():

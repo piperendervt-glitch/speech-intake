@@ -58,6 +58,7 @@ class MicCapture:
         self._flush_every = flush_every_s
         self.overflows = 0
         self.samples_written = 0
+        self.t0_unix: float | None = None
 
     def stop(self) -> None:
         self._stop.set()
@@ -65,6 +66,9 @@ class MicCapture:
     def _callback(self, indata, frames, time_info, status) -> None:  # noqa: ARG002
         if status and getattr(status, "input_overflow", False):
             self.overflows += 1
+        if self.t0_unix is None:
+            # 最初のブロックの先頭サンプルの壁時計（概算。外部プロセスの時刻をセッション秒に直す手がかり）
+            self.t0_unix = time.time() - frames / self.sample_rate
         self._q.put(np.array(indata[:, 0], dtype=np.float32, copy=True))
 
     def chunks(self) -> Iterator[AudioChunk]:
@@ -98,6 +102,8 @@ class MicCapture:
                         except queue.Empty:
                             continue
                         t0 = self.samples_written / self.sample_rate
+                        if self.samples_written == 0 and self.t0_unix is not None:
+                            self.store.update_meta(self.session, t0_unix=round(self.t0_unix, 4))
                         wav.write(block)
                         self.samples_written += len(block)
                         if time.monotonic() - last_flush > self._flush_every:

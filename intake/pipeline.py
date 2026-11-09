@@ -56,7 +56,8 @@ class Pipeline:
         self.sr = int(cfg.get("sample_rate", 16000))
         self.vad = registry.create("vad", cfg)
         self.stt = registry.create("stt", cfg)
-        self.speaker = registry.create("speaker", cfg)
+        extra = {"session_dir": cfg["_session_dir"]} if cfg.get("speaker", {}).get("provider") == "wearer" and "_session_dir" in cfg else {}
+        self.speaker = registry.create("speaker", cfg, **extra)
         self.buf = AudioBuffer(self.sr)
         self.utts: list[Utterance] = []
         self._n = 0
@@ -113,8 +114,9 @@ class Pipeline:
             self._segment(seg)
 
     def _drain(self) -> None:
-        for stage, row in getattr(self.vad, "drain_trace", lambda: [])():
-            self.sink.trace(stage, row)
+        for prov in (self.vad, self.stt, self.speaker):
+            for stage, row in getattr(prov, "drain_trace", lambda: [])():
+                self.sink.trace(stage, row)
 
     def finish(self) -> None:
         segs = self.vad.flush()
@@ -122,6 +124,7 @@ class Pipeline:
         for seg in segs:
             self._segment(seg)
         revised = self.speaker.finalize(self.utts)
+        self._drain()
         if revised is not self.utts:  # 付け直した provider だけ新しい列を返す
             self.utts = revised
             self.stats["utterances"] = len(revised)
@@ -134,8 +137,9 @@ class Pipeline:
             for c in chunks:
                 self.feed(c)
             self.finish()
+            self.stats["wall_s"] = round(time.monotonic() - t_start, 3)
+            self.stats["audio_s"] = round(self.stats["audio_s"], 3)
+            self.sink.end(self.stats)
         finally:
             self.sink.close()
-        self.stats["wall_s"] = round(time.monotonic() - t_start, 3)
-        self.stats["audio_s"] = round(self.stats["audio_s"], 3)
         return self.stats

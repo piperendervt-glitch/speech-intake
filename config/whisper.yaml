@@ -1,0 +1,16 @@
+# 段3：Silero VAD + faster-whisper
+run_name: whisper
+vad:
+  provider: silero
+  threshold: 0.5
+  min_silence_ms: 300
+  speech_pad_ms: 100
+  max_speech_s: 28
+stt:
+  provider: faster_whisper
+  model: large-v3          # GPU が無い・遅いときは small / medium / large-v3-turbo
+  device: auto             # auto: GPU があれば cuda（float16）、無ければ cpu（int8）
+  compute_type: auto
+  language: ja
+  beam_size: 5
+  one_per_vad: false
