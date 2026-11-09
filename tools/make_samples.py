@@ -2,6 +2,7 @@
 
   python tools/make_samples.py --engine kokoro   # 既定。自然な声（要: pip install "kokoro>=0.9" "misaki[ja]"、初回にモデルを取得）
   python tools/make_samples.py --engine espeak   # 機械的な声（要: espeak-ng）。開発中の動作確認用
+  python tools/make_samples.py --name conv5_ja --speakers 3   # Kokoro の 5 種類の声で 3〜5 人の打ち合わせ
 
 出力:
   samples/<name>.wav          16 kHz mono
@@ -35,9 +36,28 @@ SCRIPTS = {
         ("A", "では、今日中に担当者へ連絡をお願いします。", 0.5),
         ("B", "承知しました。", 0.4),
     ],
+    # 5 人の打ち合わせ（Kokoro の日本語の声 5 種類。--speakers で 3〜5 人に絞れる）
+    "conv5_ja": [
+        ("A", "では、来週の展示会の準備について確認しましょう。", 0.6),
+        ("B", "はい。ブースの配置図は昨日できあがりました。", 0.5),
+        ("C", "入口の近くに試作機を置くんですよね。", 0.4),
+        ("B", "そうです。電源の場所だけ、まだ決まっていません。", 0.3),
+        ("D", "電源なら、会場の担当の方に聞いておきます。", 0.6),
+        ("A", "ありがとうございます。配布する資料はどうなっていますか。", 0.5),
+        ("E", "資料は三百部、金曜日に届く予定です。", 0.7),
+        ("C", "少し足りない気がします。去年は四百部配りました。", 0.3),
+        ("E", "では、追加で百部頼んでおきます。", 0.4),
+        ("D", "当日の受付は、私と田中さんの二人で大丈夫でしょうか。", 0.8),
+        ("A", "午前中は混むので、もう一人いた方がいいですね。", 0.4),
+        ("B", "私が午前だけ手伝います。", 0.25),
+        ("C", "試作機の説明は私がやります。", 0.5),
+        ("E", "名札と飲み物の手配も、まとめて私がやっておきます。", 0.6),
+        ("A", "それでは、金曜日にもう一度集まりましょう。", 0.5),
+        ("D", "わかりました。", 0.3),
+    ],
 }
 
-KOKORO_VOICES = {"A": "jf_alpha", "B": "jm_kumo"}
+KOKORO_VOICES = {"A": "jf_alpha", "B": "jm_kumo", "C": "jf_gongitsune", "D": "jf_nezumi", "E": "jf_tebukuro"}
 ESPEAK_VOICES = {"A": ("ja", 70), "B": ("ja", 25)}  # (voice, pitch)
 
 
@@ -76,12 +96,19 @@ def tts_kokoro(spk: str, text: str) -> np.ndarray:
     return _resample(np.concatenate(parts), 24000)
 
 
-def build(name: str, engine: str, out: Path) -> None:
+def build(name: str, engine: str, out: Path, speakers: int | None = None) -> None:
     tts = tts_kokoro if engine == "kokoro" else tts_espeak
     track = np.zeros(0, dtype=np.float32)
     cursor = 0.0
     lines = []
-    for spk, text, gap in SCRIPTS[name]:
+    script = SCRIPTS[name]
+    if speakers:  # 先頭から speakers 人だけを残す（それ以外の人の台詞は、残る人に順に振り直す）
+        keep = sorted({s for s, _, _ in script})[:speakers]
+        script = [(s if s in keep else keep[i % len(keep)], t, g) for i, (s, t, g) in enumerate(script)]
+        name = f"{name[:-3] if name.endswith('_ja') else name}_{speakers}p"
+    if engine == "espeak" and {s for s, _, _ in script} - set(ESPEAK_VOICES):
+        raise SystemExit("espeak は 2 人の会話だけ")
+    for spk, text, gap in script:
         x = tts(spk, text)
         x = 0.8 * x / (np.max(np.abs(x)) + 1e-9)
         t0 = max(0.0, cursor + gap)
@@ -98,7 +125,7 @@ def build(name: str, engine: str, out: Path) -> None:
     out.mkdir(parents=True, exist_ok=True)
     stem = f"{name}_{engine}"
     sf.write(out / f"{stem}.wav", track, SR, subtype="PCM_16")
-    meta = {"name": stem, "engine": engine, "voices": KOKORO_VOICES if engine == "kokoro" else ESPEAK_VOICES,
+    meta = {"name": stem, "engine": engine, "voices": {k: v for k, v in (KOKORO_VOICES if engine == "kokoro" else ESPEAK_VOICES).items() if k in {s for s, _, _ in script}},
             "note": "t0/t1 は合成時に台詞を置いた時刻（台詞の前後の無音も含む）", "lines": lines}
     (out / f"{stem}.script.json").write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
     print(out / f"{stem}.wav", f"{len(track) / SR:.1f}s")
@@ -109,5 +136,6 @@ if __name__ == "__main__":
     ap.add_argument("--engine", choices=["kokoro", "espeak"], default="kokoro")
     ap.add_argument("--name", default="conv2_ja", choices=sorted(SCRIPTS))
     ap.add_argument("--out", default="samples")
+    ap.add_argument("--speakers", type=int, help="conv5_ja を 3〜5 人に絞る")
     a = ap.parse_args()
-    build(a.name, a.engine, Path(a.out))
+    build(a.name, a.engine, Path(a.out), a.speakers)
