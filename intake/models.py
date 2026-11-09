@@ -95,8 +95,11 @@ def fetch_phones(sec: dict, root: Path) -> None:
     if prov == "allosaurus":
         from .phones.allo import AllosaurusPhones  # noqa: PLC0415
 
-        p = AllosaurusPhones(model=sec.get("model", "uni2005"), lang=sec.get("lang", "eng"), device="cpu")
-        label = f"allosaurus:{sec.get('model', 'uni2005')}"
+        model = sec.get("model") or "uni2005"
+        if "/" in model:  # phones.yaml の wav2vec2 の名前が残っているときは既定のモデルを取る
+            model = "uni2005"
+        p = AllosaurusPhones(model=model, lang=sec.get("lang", "eng"), device="cpu")
+        label = f"allosaurus:{model}"
         print(f"取得済み: {p.name}")
     else:
         from huggingface_hub import snapshot_download  # noqa: PLC0415

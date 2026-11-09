@@ -46,6 +46,8 @@ class AllosaurusPhones:
         if _model is not None:
             self.model = _model
             return
+        if "/" in model or "\\" in model:  # phones.yaml の wav2vec2 の名前が残っているとき（provider だけ差し替えた）
+            raise ValueError(f"phones.model={model!r} は allosaurus のモデル名ではない。--set phones.model=uni2005 を付ける")
         from allosaurus.app import read_recognizer  # noqa: PLC0415
 
         from .base import pick_torch_device  # noqa: PLC0415
@@ -55,7 +57,8 @@ class AllosaurusPhones:
             from argparse import Namespace  # noqa: PLC0415
 
             self.model = read_recognizer(Namespace(model=model, device_id=0 if dev == "cuda" else -1, lang=lang, approximate=False, prior=None))
-        except Exception:  # noqa: BLE001
+        except TypeError:  # 古い allosaurus（Namespace を受けない版）。この場合 GPU と lang は read_recognizer では効かない
+            print(f"[phones] allosaurus に設定を渡せなかったので既定で読む（device={dev} は使われない）")
             self.model = read_recognizer(model)
 
     def recognize(self, audio: np.ndarray, t0: float, sample_rate: int) -> list[Phone]:

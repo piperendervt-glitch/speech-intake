@@ -1,0 +1,47 @@
+{
+  "name": "en_read_kokoro",
+  "engine": "kokoro",
+  "lang": "en",
+  "voices": {
+    "A": "af_heart"
+  },
+  "note": "t0/t1 は合成時に台詞を置いた時刻（台詞の前後の無音も含む）",
+  "lines": [
+    {
+      "speaker": "A",
+      "text": "I would like some rice with my dinner.",
+      "t0": 0.6,
+      "t1": 2.975
+    },
+    {
+      "speaker": "A",
+      "text": "The light in the hall is very bright.",
+      "t0": 3.575,
+      "t1": 6.0
+    },
+    {
+      "speaker": "A",
+      "text": "I think the sea is calm today.",
+      "t0": 6.6,
+      "t1": 8.675
+    },
+    {
+      "speaker": "A",
+      "text": "Please read the first line of the letter.",
+      "t0": 9.275,
+      "t1": 11.9
+    },
+    {
+      "speaker": "A",
+      "text": "She works at the bank near the park.",
+      "t0": 12.5,
+      "t1": 14.775
+    },
+    {
+      "speaker": "A",
+      "text": "Thank you for the beautiful flowers.",
+      "t0": 15.375,
+      "t1": 17.8
+    }
+  ]
+}
