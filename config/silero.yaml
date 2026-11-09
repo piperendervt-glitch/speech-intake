@@ -1,0 +1,9 @@
+# 段2：Silero VAD を使う設定（default.yaml との差分だけ書けばよい）
+run_name: silero
+vad:
+  provider: silero
+  threshold: 0.5
+  min_silence_ms: 300
+  min_speech_ms: 250
+  speech_pad_ms: 100
+  max_speech_s: 28

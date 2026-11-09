@@ -330,6 +330,49 @@ function drawWave(ctx, w, y, h) {
   }
 }
 
+// VAD の枠ごとの確率（trace/vad_prob.jsonl）を波形の上に折れ線で重ね、閾値を点線で出す
+function drawVadProb(ctx, w, L, r) {
+  const rows = r.trace.vad_prob;
+  if (!rows || !rows.length) return;
+  const yOf = (p) => L.y + L.h - 2 - p * (L.h - 4);
+  ctx.strokeStyle = css("--vad-edge");
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  // 枠の数が画素より多いときは画素ごとに最大値だけ描く
+  let lastPx = -1, maxP = 0, started = false;
+  const lo = bisect(rows, S.view.t0 - 0.1), hi = bisect(rows, S.view.t0 + S.view.dur + 0.1);
+  for (let i = lo; i < hi; i++) {
+    const px = Math.round(tToX(rows[i].t + 0.016, w));
+    if (px !== lastPx && lastPx >= 0) {
+      started ? ctx.lineTo(lastPx, yOf(maxP)) : ctx.moveTo(lastPx, yOf(maxP));
+      started = true;
+      maxP = 0;
+    }
+    lastPx = px;
+    maxP = Math.max(maxP, rows[i].p);
+  }
+  if (lastPx >= 0) started ? ctx.lineTo(lastPx, yOf(maxP)) : ctx.moveTo(lastPx, yOf(maxP));
+  ctx.stroke();
+  const vcfg = ((r.info.config || {}).vad) || {};
+  if (vcfg.threshold != null) {
+    ctx.setLineDash([3, 4]);
+    ctx.beginPath();
+    ctx.moveTo(0, yOf(vcfg.threshold) + 0.5);
+    ctx.lineTo(w, yOf(vcfg.threshold) + 0.5);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.fillStyle = css("--vad-edge");
+    ctx.font = "10px ui-monospace, Consolas, monospace";
+    ctx.fillText(`閾値 ${vcfg.threshold}`, 4, yOf(vcfg.threshold) - 3);
+  }
+}
+
+function bisect(rows, t) {
+  let a = 0, b = rows.length;
+  while (a < b) { const m = (a + b) >> 1; if (rows[m].t < t) a = m + 1; else b = m; }
+  return a;
+}
+
 function visible(t0, t1) {
   return t1 >= S.view.t0 && t0 <= S.view.t0 + S.view.dur;
 }
@@ -366,6 +409,7 @@ function drawPanel(cv, layout) {
           ctx.fillRect(x0, L.y, Math.max(1, x1 - x0), 3);
           hits.push({ x0, x1, y0: L.y, y1: L.y + 6, t0: s.t0, t1: s.t1, rec: s, kind: "VAD 区間" });
         }
+        drawVadProb(ctx, w, L, r);
       }
     }
     if (!r) continue;

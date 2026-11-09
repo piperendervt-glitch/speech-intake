@@ -9,3 +9,6 @@
 | aiohttp | 閲覧画面のサーバ | Apache-2.0 | https://github.com/aio-libs/aiohttp |
 | FFmpeg（任意。import 時の変換に使う） | 音声形式の変換 | LGPL/GPL | https://ffmpeg.org/ |
 | psutil（任意。netcheck で使う） | 待ち受けソケットの確認 | BSD-3-Clause | https://github.com/giampaolo/psutil |
+| Silero VAD 6.2.3（silero_vad.onnx を `intake/vad/models/` に同梱） | 発話区間の検出 | MIT（`intake/vad/models/LICENSE.silero-vad`） | https://github.com/snakers4/silero-vad |
+| ONNX Runtime | Silero VAD の実行 | MIT | https://github.com/microsoft/onnxruntime |
+| eSpeak NG（任意。開発用サンプル `samples/conv2_ja_espeak.wav` の合成に使用） | 開発用の合成音声 | GPL-3.0（合成した音声そのものには及ばない） | https://github.com/espeak-ng/espeak-ng |

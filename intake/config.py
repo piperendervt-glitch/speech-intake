@@ -37,12 +37,27 @@ def _merge(base: dict, over: dict) -> dict:
     return out
 
 
-def load_config(path: str | Path | None = None) -> dict[str, Any]:
+def apply_overrides(cfg: dict[str, Any], sets: list[str]) -> dict[str, Any]:
+    """--set vad.threshold=0.6 のような上書き。値は YAML として解釈する。"""
+    for item in sets or []:
+        key, _, val = item.partition("=")
+        if not key or not _:
+            raise ValueError(f"--set は key=value の形: {item!r}")
+        d = cfg
+        parts = key.split(".")
+        for p in parts[:-1]:
+            d = d.setdefault(p, {})
+        d[parts[-1]] = yaml.safe_load(val)
+    return cfg
+
+
+def load_config(path: str | Path | None = None, sets: list[str] | None = None) -> dict[str, Any]:
     cfg = copy.deepcopy(DEFAULTS)
     if path:
         data = yaml.safe_load(Path(path).read_text(encoding="utf-8")) or {}
         cfg = _merge(cfg, data)
         cfg["_path"] = str(path)
+    apply_overrides(cfg, sets or [])
     check_local_only(cfg)
     return cfg
 

@@ -107,11 +107,19 @@ class Pipeline:
         self.buf.push(chunk)
         self.sink.audio(chunk)
         self.speaker.feed(chunk)
-        for seg in self.vad.feed(chunk):
+        segs = self.vad.feed(chunk)
+        self._drain()
+        for seg in segs:
             self._segment(seg)
 
+    def _drain(self) -> None:
+        for stage, row in getattr(self.vad, "drain_trace", lambda: [])():
+            self.sink.trace(stage, row)
+
     def finish(self) -> None:
-        for seg in self.vad.flush():
+        segs = self.vad.flush()
+        self._drain()
+        for seg in segs:
             self._segment(seg)
         revised = self.speaker.finalize(self.utts)
         if revised is not self.utts:  # 付け直した provider だけ新しい列を返す

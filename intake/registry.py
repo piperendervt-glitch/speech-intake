@@ -11,6 +11,7 @@ from typing import Any
 PROVIDERS: dict[str, dict[str, str]] = {
     "vad": {
         "none": "intake.vad.base:NoVad",
+        "silero": "intake.vad.silero:SileroVad",
     },
     "stt": {
         "none": "intake.stt.base:NoStt",

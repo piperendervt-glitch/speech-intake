@@ -107,6 +107,8 @@ def cmd_netcheck(a, cfg, store):  # noqa: ARG001
 def main(argv=None):
     ap = argparse.ArgumentParser(prog="intake")
     ap.add_argument("-c", "--config", help="設定 YAML（省略時は既定値）")
+    ap.add_argument("--set", action="append", default=[], metavar="KEY=VALUE",
+                    help="設定の一部を上書き（例 --set vad.min_silence_ms=800）。何度でも指定できる")
     sub = ap.add_subparsers(dest="cmd", required=True)
 
     r = sub.add_parser("record", help="マイクから録音")
@@ -138,7 +140,7 @@ def main(argv=None):
     v.set_defaults(fn=cmd_view)
 
     a = ap.parse_args(argv)
-    cfg = load_config(a.config)
+    cfg = load_config(a.config, a.set)
     store = SessionStore(Path(cfg["sessions_dir"]))
     a.fn(a, cfg, store)
 
