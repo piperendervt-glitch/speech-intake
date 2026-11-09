@@ -11,7 +11,15 @@ face-track-map / why-probe / Lumi に共通する入力側の部品。
 
 ```bash
 python -m venv .venv && .venv\Scripts\activate      # Windows（mac/Linux は source .venv/bin/activate）
-pip install -e .[dev]
+pip install -e .[dev,vad,stt,speaker]
+# NVIDIA GPU で STT を動かすとき（Windows）。DLL の場所は intake が自動で通す
+pip install nvidia-cublas-cu12 "nvidia-cudnn-cu12>=9,<10"
+python -m intake models speaker          # 話者分離モデル（GitHub, 約 40 MB, トークン不要）
+# whisper のモデルは初回の実行で HuggingFace から自動取得（トークン不要）。2 回目以降はネットに問い合わせない
+
+# 確認用サンプルを Kokoro で作り直すときだけ
+pip install -e .[samples] && python -m unidic download   # 日本語辞書（unidic）が別に要る
+python tools/make_samples.py --engine kokoro
 
 python -m intake devices                 # 入力デバイス一覧
 python -m intake record                  # マイクから録音（Ctrl+C で止める）→ sessions/<日時>/audio.wav
@@ -22,7 +30,8 @@ python -m intake view                    # 閲覧画面 http://127.0.0.1:8765/
 python -m intake netcheck                # 待ち受けが localhost だけか確かめる
 ```
 
-設定は YAML 1 つ（`config/default.yaml`）。各段の `provider` 名で実装を差し替える。
+設定は YAML 1 つ。用意してある設定：`config/default.yaml`（何もしない）、`silero.yaml`（VAD のみ）、
+`whisper.yaml`（VAD+STT）、`full.yaml`（VAD+STT+話者分離）、`stream.yaml`（full+WebSocket 配信）。各段の `provider` 名で実装を差し替える。
 手元専用の設定は `config/local*.yaml` に置くと git に入らない。
 
 ## 置き場所
@@ -34,6 +43,15 @@ sessions/<session>/runs/<run>/trace/*.jsonl   段ごとの記録（VAD 区間な
 ```
 
 時刻はすべて「セッション開始からの秒」。
+
+## 合成サンプルで確かめる
+
+```bash
+python -m intake import samples/conv2_ja_kokoro.wav --label kokoro          # → セッション id
+python tools/script_to_run.py <session> samples/conv2_ja_kokoro.script.json  # 台本どおりの正解を run「script」に
+python -m intake -c config/full.yaml replay <session>
+python -m intake view    # 設定 A=script、設定 B=full で上下に比較
+```
 
 ## 段ごとの報告
 

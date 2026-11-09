@@ -1,6 +1,8 @@
 """faster-whisper による文字起こし（単語ごとの時刻つき）。GPU があれば GPU を使う。
 
-モデルは初回に HuggingFace から取得される（large-v3 は約 3 GB）。取得先は download_root で変えられる。
+モデルは初回だけ HuggingFace から取得される（large-v3 は約 3 GB、トークン不要）。取得先は download_root で変えられる
+（省略時は HuggingFace の既定のキャッシュ）。2 回目以降は手元のファイルだけを使い、ネットに問い合わせない。
+local_files_only: true にすると取得もしない（完全にオフライン）。
 """
 
 from __future__ import annotations
@@ -83,16 +85,20 @@ class FasterWhisperStt:
         if _model is not None:
             self.model = _model
         else:
+            import os  # noqa: PLC0415
+
+            os.environ.setdefault("HF_HUB_DISABLE_TELEMETRY", "1")
             from faster_whisper import WhisperModel  # noqa: PLC0415
 
-            self.model = WhisperModel(
-                model,
-                device=self.device,
-                compute_type=self.compute_type,
-                download_root=download_root,
-                local_files_only=local_files_only,
-                cpu_threads=cpu_threads,
-            )
+            kw = dict(device=self.device, compute_type=self.compute_type, download_root=download_root, cpu_threads=cpu_threads)
+            try:
+                # 手元にあればネットに問い合わせない（版の確認の通信もしない）
+                self.model = WhisperModel(model, local_files_only=True, **kw)
+            except Exception:  # noqa: BLE001
+                if local_files_only:
+                    raise
+                print(f"[stt] {model} が手元に無いので HuggingFace から取得する（初回のみ）")
+                self.model = WhisperModel(model, local_files_only=False, **kw)
 
     def transcribe(self, audio: np.ndarray, t0: float, sample_rate: int) -> list[SttResult]:
         if sample_rate != 16000:
