@@ -53,6 +53,18 @@ python -m intake -c config/full.yaml replay <session>
 python -m intake view    # 設定 A=script、設定 B=full で上下に比較
 ```
 
+## 公開データで確かめる（Common Voice 日本語、CC0）
+
+Mozilla Data Collective（https://datacollective.mozillafoundation.org/）で「Common Voice Scripted Speech - Japanese」を
+ログインしてダウンロードし、`data/`（git に入らない）に展開する。別々の人の読み上げをつないで、正解つきの疑似会話を作る：
+
+```bash
+python tools/make_cv_conversation.py data/cv-corpus-…/ja --speakers 3 --turns 16 --overlap   # → data/cv_conv/cv_conv_1.wav
+python -m intake import data/cv_conv/cv_conv_1.wav --label cv
+python tools/script_to_run.py <session> data/cv_conv/cv_conv_1.script.json
+python -m intake -c config/full.yaml replay <session>
+```
+
 ## 段ごとの報告
 
 `docs/REPORT_段n.md`。ダウンロードや長い処理の事前記録は `docs/LOG.md`。
