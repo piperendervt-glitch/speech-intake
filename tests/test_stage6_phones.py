@@ -47,6 +47,9 @@ def test_classes_table_and_roundtrip():
     arpa = [c.cls for c in t.classify_arpabet(["R", "AY1", "S"])]
     assert ipa == arpa == ["R", "AY", "S"]
     assert looks_arpabet(["R", "AY1", "S"]) and not looks_arpabet(["ɹ", "aɪ"])
+    # 開放なしの印 ˺ は前の音素に付けて落とす。数字（声調の番号）も落とす
+    assert split_ipa("bɑb˺") == ["b", "ɑ", "b˺"]
+    assert [c.cls for c in t.classify_ipa(["b˺", "5"])] == ["B"]
     # 表に無い記号は隠さず ? を付けて残す。元の位置に戻せる
     cs = t.classify_ipa(["k", "ʘ"])
     assert cs[1].cls == "?ʘ" and cs[1].src == (1,)

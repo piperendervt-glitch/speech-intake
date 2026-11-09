@@ -1,7 +1,7 @@
 # speech-intake
 
 マイクまたは録音から、**発話レコード**（いつ・誰が・何を言ったか）の流れを出す入力モジュール。
-face-track-map / why-probe / Lumi に共通する入力側の部品。
+face-track-map / why-probe / Lumi に共通する入力側の部品。英語の発音を音素列として観察することもできる（段6〜9、下の「英語の発音を音素で見る」）。
 
 - 推察（解釈・要約・文脈判定）は書かない。出力は観察表（発話レコードの列）だけ。
 - 推察は利用側が別ファイル（推察表）に書き、各行に `refs: ["utt_000123", ...]` を必ず付ける。型は `intake/schema`。
@@ -64,6 +64,25 @@ python -m intake import data/cv_conv/cv_conv_1.wav --label cv
 python tools/script_to_run.py <session> data/cv_conv/cv_conv_1.script.json
 python -m intake -c config/full.yaml replay <session>
 ```
+
+## 英語の発音を音素で見る（段6〜9）
+
+Whisper は誤った発音を正しい英単語に直して書くので、文字起こしとは別に、音素認識器が聞き取った音素列（IPA）を発話レコードの
+`phones` に入れる（schema 0.2）。期待される音素との差は**並べて見せるだけ**で、誤りの判定はしない（利用側が推察表に書く）。
+
+```bash
+pip install -e .[phones,g2p,samples-en]                 # torch は上の GPU 版を使う。allosaurus は任意（pip install allosaurus）
+python -m intake import samples/en_misread_kokoro.wav --label en-misread    # rice→lice などわざと誤読させた合成音声
+python -m intake -c config/phones.yaml replay <session>                      # 初回に wav2vec2（約 1.2 GB、トークン不要）を取得
+python tools/ref_to_run.py <session> samples/en_misread_kokoro.script.json   # 台本の G2P を参照 run「ref_g2p」に → 自動で整列
+python -m intake view    # 「音素」をオン。認識した音素・参照の音素・差分の色（一致／置換／脱落／挿入）、音素クリックでその前後を再生
+
+python tools/import_saa.py --japanese all --native same --replay   # Speech Accent Archive（OSF、ログイン不要、data/ に置く）
+python tools/import_idea.py --pages 1-17 --replay                  # IDEA の日本の話者（個人の研究目的のみ）
+python tools/align_report.py --run phones --ref ref --corpus saa   # 群（japanese / native）ごとの数
+```
+
+粗い音素クラスの表は `intake/phones/classes.yaml`（41 クラス、直してよい）。利用側への申し送りは `docs/INTEGRATION_JA.md` §4。
 
 ## 段ごとの報告
 

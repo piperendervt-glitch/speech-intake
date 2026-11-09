@@ -21,7 +21,7 @@ DEFAULT_TABLE = Path(__file__).with_name("classes.yaml")
 UNKNOWN = "?"
 _ARPA_STRESS = re.compile(r"[0-9]+$")
 # 前の音素に付く修飾文字（基底の文字ではない）。split_ipa で前の音素にくっつける
-_MODIFIERS = set("ːˑʰʲʷˠˤⁿˡʼ˞")
+_MODIFIERS = set("ːˑʰʲʷˠˤⁿˡʼ˞˺˹")
 _TIE = "͜͡"
 _STRESS = "ˈˌ"
 
