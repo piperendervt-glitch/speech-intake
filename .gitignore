@@ -16,5 +16,5 @@ __pycache__/
 .pytest_cache/
 *.egg-info/
 # モデルのキャッシュ
-models/
+/models/
 .cache/
