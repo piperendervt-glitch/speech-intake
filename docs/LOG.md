@@ -18,3 +18,12 @@
 | 2026-11-09 14:10 | misaki[en]（PyPI。spacy と en_core_web_sm 約 13 MB）・Kokoro の英語の声 af_heart | 段6・7 の英語合成サンプル（samples/en_read_kokoro.wav, en_misread_kokoro.wav） | 数分 | 成功（22:46〜22:47）。misaki 0.9.4・kokoro 0.9.4・spacy 3.8.18 は既に入っていた。初回の en_read 生成で en_core_web_sm 3.8.0 を自動取得。en_read_kokoro.wav 18.6 秒（生成 31 秒）、en_misread_kokoro.wav 18.7 秒（11 秒） |
 | 2026-11-09 15:00 | Speech Accent Archive（OSF osf.io/yh23d、ログイン不要）：一覧（API）と、日本語話者全員（mp3 44 件、転写 txt）＋英語母語の対照群 44 件（転写のある人を番号順に）。1 件 約 0.6 MB、計 約 55 MB | 段8 の取り込み（tools/import_saa.py）。data/saa/ に置く（git 対象外） | 取得 数分。88 セッションを phones で流すのに 15〜20 分（whisper を毎回読み込むため 1 件 10 秒前後） | OSF 一覧 5541 件（japanese mp3 44・txt 16、english mp3 659・txt 185）。88 セッション（japanese 44 うち人間の転写 16、native 44 全員転写あり）、mp3 計 41 MB。取得＋phones の replay で 17.5 分。txt は「Japanese speaker 1」の見出し行＋[IPA] の形だったので角括弧の中だけ取るよう修正。追加で allosaurus（uni2005/eng）を転写つき 32 セッション（japanese 16＋native 16）に 3.3 分 |
 | 2026-11-09 15:00 | IDEA（dialectsarchive.com）japan-1〜17 のページと mp3（1 件 約 1 MB）と台本ページ | 段9 の取り込み（tools/import_idea.py）。data/idea/（git 対象外）。個人の研究目的の範囲、再配布しない | 取得 数分、流すのに 5 分前後 | 17 ページ・mp3 計 46 MB、取得＋replay で 9.6 分。精密表記ありは japan-12〜16 の 5 件（いずれも台本の最後まで。12・14・15 は題名から書かれているので題名を落とした）。japan-1〜3 は Comma ではなく Rainbow Passage の第 1 段落を読んでいたので、台本を 2 つ持ち STT とよく合う方を選び、読まれた文だけに切るようにした。朗読範囲が自由発話へはみ出す件（japan-6・7・14）は一致の密な塊だけを使うよう修正 |
+
+### Common Voice 英語（accent＝Japanese）の見積もり（段9、2026-11-09 15:10）
+
+| 経路 | 取れるか | 大きさ・時間の見込み |
+|---|---|---|
+| HuggingFace の streaming（mozilla-foundation/common_voice_17_0 など） | **取れない**。17_0・13_0 は README だけ（「2025-10 から Mozilla Data Collective 限定」）、11_0 は 401 | — |
+| Mozilla Data Collective からの取得 | アカウントと API キーが要る（ログイン無しの経路は見つからない） | 英語は全体で数十 GB（分割の単位は言語ごとの 1 本）。accent 欄は validated.tsv にあるので、Japan を含む 300 クリップを拾うにも全体を落とす必要がある見込み。100 Mbps で 1 時間超 |
+
+→ 依頼文 §5 の「見積もりが 1 時間を超える場合」に当たり、さらにアカウントが要る（以前、日本語版もこの理由で見送った）。ユーザーに判断を仰いだ。取り込みツール（tools/import_cv_accent.py）は、手元に置いたデータを読むだけの形で用意した。
