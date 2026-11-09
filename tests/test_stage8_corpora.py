@@ -16,6 +16,8 @@ def test_saa_index_counts_and_transcription():
     assert s.speakers(idx, "english") == [1, 2]
     assert s.read_transcription("﻿ pʰliːz  kʰɔl\n stɛlə ") == "pʰliːz kʰɔl stɛlə"
     assert s.read_transcription("No transcription yet") is None
+    # OSF の txt：見出し行のあとに角括弧で IPA
+    assert s.read_transcription("Japanese speaker 1\n\n[pliːs kol\n steɺɑ]\n") == "pliːs kol steɺɑ"
     assert len(s.PARAGRAPH.split()) == 69
 
 
@@ -31,6 +33,21 @@ def test_idea_extract_from_html():
     assert ex["phonetic"] == "wɛl hiɚz ə stɔɹi fɔɹ ju"
     assert ex["free"] == "I was born in Osaka."
     assert i.pages("1-3,7") == [1, 2, 3, 7]
+
+    # 実際のページの形：メニューに「Phonetic Transcriptions」、見出しは「… OF SCRIPTED SPEECH:」、N/A、自由発話の後に TRANSCRIBED BY
+    page = """<li>Phonetic Transcriptions</li><p>PHONETIC TRANSCRIPTION OF SCRIPTED SPEECH:</p><p>ˈkʰama gɛtsɐ ˈkʰjuɹ̩ˠ wɛl</p>
+    <p>TRANSCRIBED BY: X</p><p>ORTHOGRAPHIC TRANSCRIPTION OF UNSCRIPTED SPEECH:</p><p>I was born in Anjo.</p><p>TRANSCRIBED BY: X</p>
+    <p>PHONETIC TRANSCRIPTION OF UNSCRIPTED SPEECH:</p><p>ˈaɪ wəz bɔ̃</p><p>TRANSCRIBED BY: X</p>"""
+    ex = i.extract(page)
+    assert ex["phonetic"] == "ˈkʰama gɛtsɐ ˈkʰjuɹ̩ˠ wɛl"
+    assert ex["free"] == "I was born in Anjo."
+    na = "<p>PHONETIC TRANSCRIPTION OF SCRIPTED SPEECH: N/A</p><p>TRANSCRIBED BY: N/A</p>"
+    assert i.extract(na)["phonetic"] is None
+    paras = ["Comma Gets A Cure", "Well, here’s a story for you: Sarah.", "Mid.", "a fair price for a cure.", "Comma Gets a Cure and derivative works"]
+    assert i.strip_title("ˈkʰama gɛtsɐ ˈkʰjuɹ̩ˠ wɛl ˈçiəz̥ɐ") == "wɛl ˈçiəz̥ɐ"
+    assert i.strip_title("ˈkʊmɐ gɛts ə ˈkjɚ wɛl̴ ˈɸ͜hi˞ɹɪzə") == "wɛl̴ ˈɸ͜hi˞ɹɪzə"
+    assert i.strip_title("wɛl̴ ˈçiəz ə sɔɪ fə") == "wɛl̴ ˈçiəz ə sɔɪ fə"
+    assert i.passage(paras) == "Well, here's a story for you: Sarah. Mid. a fair price for a cure."
 
 
 def test_cv_pick_rows_limit():
@@ -49,3 +66,12 @@ def test_locate_reading_span():
     t0, t1 = r.locate("Please call Stella. Ask her to bring these things.", ws, pad=0)
     assert (t0, t1) == pytest.approx((2.0, 9.3))
     assert r.locate("nothing matches here", ws) is None
+
+    # 朗読の後の自由発話にまばらに一致する語（a / the）は、離れた塊として捨てる
+    script = "The cat sat on a mat. The dog ran to the park. Birds sing at a tree."
+    spoken = "the cat sat on a mat the dog ran to the park".split() + ["uh"] * 30 + "then a the".split()
+    ws = [Word(w, float(t), t + 0.5) for t, w in enumerate(spoken)]
+    t0, t1 = r.locate(script, ws, pad=0)
+    assert (t0, t1) == pytest.approx((0.0, 11.5))
+    # 台本の一部だけ読んだときは、読まれた文だけを残す
+    assert r.trim_to_read(script, ws) == "The cat sat on a mat. The dog ran to the park."

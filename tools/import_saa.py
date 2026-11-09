@@ -29,6 +29,7 @@ PARAGRAPH = ("Please call Stella. Ask her to bring these things with her from th
              "Wednesday at the train station.")
 NAME = re.compile(r"^(?P<lang>[a-z]+)(?P<n>\d+)\.(?P<ext>mp3|txt|gif)$")
 NO_TRANSCRIPTION = re.compile(r"no transcription", re.I)
+BRACKET = re.compile(r"\[([^\[\]]*)\]")
 
 
 def build_index(root: Path, refresh: bool = False) -> dict[str, dict[str, str]]:
@@ -62,11 +63,19 @@ def speakers(idx: dict, lang: str) -> list[int]:
 
 
 def read_transcription(raw: str) -> str | None:
-    """転写のテキスト。角括弧などは classes.yaml の drop で落ちるので、空白をそろえるだけにする。"""
-    t = " ".join(raw.replace("﻿", "").split())
-    if not t or NO_TRANSCRIPTION.search(t):
+    """転写のテキスト（IPA だけ）。
+
+    OSF の txt は「Japanese speaker 1」のような見出し行のあとに [ ... ] で IPA が続く形のことがある。
+    角括弧があればその中だけを取り、無ければ全体を使う。空白はそろえる。
+    """
+    t = raw.replace("﻿", "")
+    if NO_TRANSCRIPTION.search(t):
         return None
-    return t
+    inner = BRACKET.findall(t)
+    if inner:
+        t = " ".join(inner)
+    t = " ".join(t.split())
+    return t or None
 
 
 def main(argv=None):

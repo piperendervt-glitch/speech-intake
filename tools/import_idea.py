@@ -80,15 +80,85 @@ def section(paras: list[str], start: re.Pattern, stop: re.Pattern) -> str | None
     return None
 
 
-HEAD = re.compile(r"^(BIOGRAPHICAL|PHONETIC TRANSCRIPTION|SCRIPTED SPEECH|UNSCRIPTED SPEECH|TRANSCRIPTION|COMMENTARY|Recorded by|Transcribed by)", re.I)
+HEAD = re.compile(r"^(BIOGRAPHICAL|PHONETIC TRANSCRIPTION|ORTHOGRAPHIC TRANSCRIPTION|SCRIPTED SPEECH|UNSCRIPTED SPEECH|TRANSCRIPTION|"
+                  r"SCHOLARLY COMMENTARY|COMMENTARY|DATE OF|Recorded by|Transcribed by)", re.I)
+# 見出しは大文字で段落の頭にある。メニューの「Phonetic Transcriptions」や本文中の語に当たらないよう、大文字・行頭に限る
+PHONETIC_HEAD = re.compile(r"^PHONETIC TRANSCRIPTION(?! OF UNSCRIPTED)(?: OF SCRIPTED SPEECH)?")
+FREE_HEAD = re.compile(r"^(?:ORTHOGRAPHIC )?TRANSCRIPTION OF UNSCRIPTED SPEECH|^UNSCRIPTED SPEECH")
+TITLE_IPA = re.compile(r"^ˈ?k\S*m\S*\s+\S*g\S*ts\S*\s+\S+\s+")  # 「ˈkʰama gɛtsɐ ˈkʰjuɹ̩ˠ」「ˈkʊmɐ gɛts ə ˈkjɚ」など
+
+
+def strip_title(ipa: str) -> str:
+    """精密表記の頭に題名「Comma Gets a Cure」があれば落とす（japan-12・14・15 は題名から、13・16 は本文から書かれている）。
+    参照の文（text）は本文だけなので、それにそろえる。"""
+    m = TITLE_IPA.match(ipa)
+    if not m:
+        return ipa
+    rest = ipa[m.end():]
+    # 「gɛtsɐ ˈkʰjuɹ̩ˠ」のように a が前の語に付いて 3 語のときと、「gɛts ə ˈkjɚ」の 4 語のときがある
+    first = rest.split(maxsplit=1)
+    if first and re.match(r"^ˈ?(k|kʰ)j", first[0]):
+        rest = first[1] if len(first) > 1 else ""
+    return rest
 
 
 def extract(page: str) -> dict:
     paras = paragraphs(page)
     d = {"mp3": sorted(set(MP3.findall(page)))}
-    d["phonetic"] = section(paras, re.compile(r"PHONETIC TRANSCRIPTION", re.I), HEAD)
-    d["free"] = section(paras, re.compile(r"UNSCRIPTED SPEECH|TRANSCRIPTION OF UNSCRIPTED", re.I), re.compile(r"^(COMMENTARY|Recorded by|PHONETIC)", re.I))
+    d["phonetic"] = section(paras, PHONETIC_HEAD, HEAD)
+    d["free"] = section(paras, FREE_HEAD, HEAD)
     return d
+
+
+def passage(paras: list[str]) -> str | None:
+    """台本ページの段落から本文だけ（「Well, here's a story」から「a fair price for a cure.」まで）。引用符は直線に。"""
+    paras = [x.replace("’", "'").replace("‘", "'").replace("“", '"').replace("”", '"') for x in paras]
+    i = next((k for k, x in enumerate(paras) if x.startswith("Well, here's a story")), None)
+    if i is None:
+        return None
+    body = []
+    for x in paras[i:]:
+        body.append(x)
+        if re.search(r"price for a cure\.\s*$", x):
+            return " ".join(body)
+    return None
+
+
+RAINBOW_PAGE = f"{BASE}/the-rainbow-passage"
+
+
+def rainbow_text(root: Path) -> str:
+    """古い録音（japan-1〜3 など）が読む「The Rainbow Passage」（data/idea/rainbow.txt）。多くは最初の段落だけを読むので、
+    参照の文は ref_to_run の --trim-to-read で読まれた文に切る。"""
+    f = root / "rainbow.txt"
+    if f.exists():
+        return f.read_text(encoding="utf-8").strip()
+    paras = paragraphs(fetch(RAINBOW_PAGE, root / "rainbow.html").decode("utf-8", "replace"))
+    t = next((x for x in paras if x.startswith("When the sunlight strikes raindrops")), None)
+    if t is None:
+        raise SystemExit(f"Rainbow Passage の本文が見つからない。{root / 'rainbow.html'} を見て data/idea/rainbow.txt に置く")
+    t = re.sub(r"\s+([,.])", r"\1", t.replace("’", "'"))
+    f.write_text(t, encoding="utf-8")
+    return t
+
+
+def pick_passage(passages: dict[str, str], words: list) -> str:
+    """STT の単語列に最もよく一致する台本の名前。"""
+    import ref_to_run  # noqa: PLC0415
+
+    return max(passages, key=lambda k: len(ref_to_run.match_cluster(passages[k], words)))
+
+
+def stt_words(store, sid: str, run: str) -> list:
+    from intake.schema import Utterance  # noqa: PLC0415
+
+    f = store.run_dir(sid, run) / "utterances.jsonl"
+    ws = []
+    if f.exists():
+        for x in f.read_text(encoding="utf-8").splitlines():
+            if x.strip():
+                ws.extend(Utterance.from_dict(json.loads(x)).words)
+    return sorted(ws, key=lambda w: w.t0)
 
 
 def comma_text(root: Path) -> str:
@@ -97,15 +167,9 @@ def comma_text(root: Path) -> str:
     if f.exists():
         return f.read_text(encoding="utf-8").strip()
     paras = paragraphs(fetch(COMMA_PAGE, root / "comma.html").decode("utf-8", "replace"))
-    i = next((k for k, x in enumerate(paras) if x.startswith("Well, here's a story")), None)
-    if i is None:
+    t = passage(paras)
+    if t is None:
         raise SystemExit(f"台本の本文が見つからない。{root / 'comma.html'} を見て data/idea/comma.txt に本文を置く")
-    body = []
-    for x in paras[i:]:
-        body.append(x)
-        if "comma" in x.lower() and "cure" in x.lower() and len(body) > 3:
-            break
-    t = " ".join(body)
     f.write_text(t, encoding="utf-8")
     return t
 
@@ -136,7 +200,7 @@ def main(argv=None):
     store = SessionStore(cfg["sessions_dir"])
     run = a.run or cfg.get("run_name", "phones")
     root = Path(a.data)
-    script = comma_text(root)
+    passages = {"comma": comma_text(root), "rainbow": rainbow_text(root)}
     import ref_to_run  # noqa: PLC0415
 
     summary = []
@@ -159,16 +223,19 @@ def main(argv=None):
             from intake.__main__ import main as intake_main  # noqa: PLC0415
 
             intake_main(["-c", a.config, "replay", sid, "--run", run])
-        line = {"text": script}
+        # 録音によって読む台本が違う（古いものは Rainbow Passage）。STT の単語列とよく合う方を使う
+        which = pick_passage(passages, stt_words(store, sid, run))
+        line = {"text": passages[which]}
         if ex["phonetic"]:
-            line["phones"] = ex["phonetic"]
+            line["phones"] = strip_title(ex["phonetic"])
         ref = {"name": name, "group": a.group, "lang": "en", "source": f"idea:{name}", "transcriber": "idea-transcriber",
-               "note": "IDEA の台本の朗読部分。範囲は STT の単語列から探した（located_by）", "lines": [line]}
+               "passage": which,
+               "note": f"IDEA の台本（{which}）の朗読部分。範囲は STT の単語列から探した（located_by）", "lines": [line]}
         rj = d / "ref.json"
         rj.write_text(json.dumps(ref, ensure_ascii=False, indent=1), encoding="utf-8")
-        ref_to_run.main([sid, str(rj), "--g2p", a.g2p, "--sessions-dir", cfg["sessions_dir"], "--locate-run", run])
-        summary.append({"page": name, "session": sid, "phonetic": bool(ex["phonetic"]), "free": bool(ex["free"])})
-        print(f"{name}\t{sid}\t精密表記 {'あり' if ex['phonetic'] else 'なし'}\t自由発話の書き起こし {'あり' if ex['free'] else 'なし'}")
+        ref_to_run.main([sid, str(rj), "--g2p", a.g2p, "--sessions-dir", cfg["sessions_dir"], "--locate-run", run, "--trim-to-read"])
+        summary.append({"page": name, "session": sid, "passage": which, "phonetic": bool(ex["phonetic"]), "free": bool(ex["free"])})
+        print(f"{name}\t{sid}\t{which}\t精密表記 {'あり' if ex['phonetic'] else 'なし'}\t自由発話の書き起こし {'あり' if ex['free'] else 'なし'}")
     print(json.dumps({"pages": len(summary), "phonetic": sum(x["phonetic"] for x in summary)}, ensure_ascii=False))
 
 
