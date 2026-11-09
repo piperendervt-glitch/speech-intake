@@ -1,0 +1,102 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "speech-intake/utterance-0.1.json",
+  "title": "Utterance (観察表の 1 行)",
+  "type": "object",
+  "required": [
+    "id",
+    "session",
+    "t0",
+    "t1"
+  ],
+  "properties": {
+    "id": {
+      "type": "string",
+      "pattern": "^utt_[0-9]{6,}$"
+    },
+    "session": {
+      "type": "string",
+      "pattern": "^[0-9]{8}_[0-9]{6}(_[A-Za-z0-9-]+)?$"
+    },
+    "t0": {
+      "type": "number",
+      "minimum": 0,
+      "description": "セッション開始からの秒"
+    },
+    "t1": {
+      "type": "number",
+      "minimum": 0,
+      "description": "セッション開始からの秒"
+    },
+    "text": {
+      "type": "string"
+    },
+    "lang": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "speaker": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "speaker_conf": {
+      "type": [
+        "number",
+        "null"
+      ],
+      "minimum": 0,
+      "maximum": 1
+    },
+    "speaker_source": {
+      "enum": [
+        "acoustic",
+        "wearer",
+        "face",
+        "none"
+      ]
+    },
+    "words": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "w",
+          "t0",
+          "t1"
+        ],
+        "properties": {
+          "w": {
+            "type": "string"
+          },
+          "t0": {
+            "type": "number",
+            "minimum": 0
+          },
+          "t1": {
+            "type": "number",
+            "minimum": 0
+          },
+          "p": {
+            "type": "number"
+          }
+        }
+      }
+    },
+    "vad": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "stt": {
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  }
+}

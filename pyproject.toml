@@ -1,0 +1,34 @@
+[project]
+name = "speech-intake"
+version = "0.1.0"
+description = "マイク／録音から発話レコード（いつ・誰が・何を言ったか）を出す入力モジュール"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+dependencies = [
+  "numpy>=1.26",
+  "soundfile>=0.12",
+  "pyyaml>=6",
+  "aiohttp>=3.9",
+  "sounddevice>=0.4.6",
+]
+
+[project.optional-dependencies]
+vad = ["silero-vad>=5.1", "torch>=2.2"]
+stt = ["faster-whisper>=1.0"]
+dev = ["pytest>=8", "psutil>=5.9"]
+
+[project.scripts]
+intake = "intake.__main__:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["intake*", "viewer*"]
+
+[tool.setuptools.package-data]
+viewer = ["static/*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

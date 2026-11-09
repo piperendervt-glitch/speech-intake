@@ -1,0 +1,32 @@
+# speech-intake の設定。各段の provider 名で実装を差し替える。
+# 手元専用の設定は config/local*.yaml に置く（git に入らない）。
+sessions_dir: sessions
+run_name: default          # 流し直しの結果を置く名前（比較表示で A/B に選ぶ）
+sample_rate: 16000
+
+capture:
+  provider: sounddevice
+  device: null             # null=既定の入力。番号か名前（python -m intake devices で一覧）
+  block_ms: 32
+
+replay:
+  speed: fast              # fast（待たない）／ realtime（音声の長さどおり）
+  chunk_ms: 32
+
+vad:
+  provider: none
+stt:
+  provider: none
+speaker:
+  provider: none
+
+sink:
+  jsonl: true
+  websocket:
+    enabled: false
+    host: 127.0.0.1        # localhost 以外は起動時に拒否する
+    port: 8766
+
+viewer:
+  host: 127.0.0.1          # localhost 以外は起動時に拒否する
+  port: 8765

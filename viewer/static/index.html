@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>speech-intake viewer</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header>
+  <div class="row">
+    <strong class="brand">speech-intake</strong>
+    <label>セッション <select id="session"></select></label>
+    <label>設定 A <select id="runA"></select></label>
+    <label>設定 B（比較） <select id="runB"></select></label>
+    <button id="reload" title="一覧と結果を読み直す">再読込</button>
+    <span id="status" class="muted"></span>
+  </div>
+  <div class="row">
+    <label><input type="checkbox" id="tVad" checked> VAD 区間</label>
+    <label><input type="checkbox" id="tText" checked> 文字</label>
+    <label><input type="checkbox" id="tWords"> 単語時刻</label>
+    <label><input type="checkbox" id="tSpk" checked> 話者の色分け</label>
+    <span class="sep"></span>
+    <button id="zoomIn" title="拡大（ホイール）">＋</button>
+    <button id="zoomOut" title="縮小（ホイール）">－</button>
+    <button id="zoomFit" title="全体を表示">全体</button>
+    <button id="play" title="スペースキー">▶ 再生</button>
+    <span id="clock" class="mono"></span>
+  </div>
+</header>
+<main>
+  <canvas id="ruler" height="24"></canvas>
+  <div id="panels"></div>
+  <p class="help muted">
+    ホイール：拡大縮小／Shift+ホイール・ドラッグ：左右に移動／区間や文字をクリック：その部分を再生／
+    波形の何もない所をクリック：そこから再生／スペース：再生・停止／マウスを重ねると元のレコードを表示
+  </p>
+  <div id="tables"></div>
+</main>
+<div id="tip" hidden></div>
+<audio id="audio" preload="auto"></audio>
+<script src="/static/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,20 @@
+# 録音・文字起こし（個人の音声データ）は push しない
+sessions/
+*.wav
+*.flac
+*.mp3
+*.m4a
+*.ogg
+!samples/*.wav
+# 手元の設定（デバイス名やパスを含みうる）
+config/local*.yaml
+*.local.yaml
+# Python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+*.egg-info/
+# モデルのキャッシュ
+models/
+.cache/

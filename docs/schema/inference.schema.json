@@ -1,0 +1,49 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "speech-intake/inference-0.1.json",
+  "title": "Inference (推察表の 1 行。利用側が書く)",
+  "type": "object",
+  "required": [
+    "id",
+    "refs",
+    "kind",
+    "value",
+    "by"
+  ],
+  "properties": {
+    "id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "refs": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "string",
+        "pattern": "^utt_[0-9]{6,}$"
+      },
+      "description": "根拠にした発話レコード id。必須。"
+    },
+    "kind": {
+      "type": "string",
+      "minLength": 1
+    },
+    "value": {},
+    "by": {
+      "type": "string",
+      "minLength": 1
+    },
+    "conf": {
+      "type": [
+        "number",
+        "null"
+      ]
+    },
+    "note": {
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  }
+}
