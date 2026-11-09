@@ -66,6 +66,21 @@ ipa:
   ai: AY
   au: AW
   oi: OY
+  # 二重母音の後半をわたり音（j / w）で書く表記（allosaurus がこう出す）。認識側は語の区切りを持たないので、
+  # 語をまたいだ母音＋j/w（例 "the yard" の ə j）もまとめてしまうことがある
+  aj: AY
+  ɑj: AY
+  äj: AY
+  ʌj: AY
+  ej: EY
+  ɛj: EY
+  ɔj: OY
+  oj: OY
+  aw: AW
+  æw: AW
+  ɑw: AW
+  ow: OW
+  əw: OW
   oɪ: OY
   # r 音化した母音の書き方の揺れ
   ɜɹ: ER

@@ -5,7 +5,8 @@
 ref.json（samples/*.script.json もそのまま使える）:
   {"name": "...", "group": "japanese", "source": "saa:japanese1", "note": "...",
    "lines": [{"t0": 0.0, "t1": 25.3, "text": "Please call Stella.", "phones": "pʰliːz kʰɔl stɛlə", "speaker": "A"}]}
-  - t0/t1 が無い行は録音全体（0〜長さ）とみなす
+  - t0/t1 が無い行は録音全体（0〜長さ）とみなす。--locate-run R を付けると、run R の STT の単語列から
+    text の読まれた範囲を探して t0/t1 にする（台本の朗読の後に自由発話が続く録音など）
   - phones は人間の音声転写（IPA。空白で語を区切る）。あれば run「ref」（phones_source: human）に入れる
   - text は G2P で辞書上の音素にして run「ref_g2p」（phones_source: g2p）に入れる。--g2p none で作らない
 
@@ -25,7 +26,7 @@ import soundfile as sf
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from intake.phones.align import align_session  # noqa: E402
+from intake.phones.align import align_session, edit_align, norm_words  # noqa: E402
 from intake.phones.classes import split_ipa  # noqa: E402
 from intake.schema import Phone, Utterance, make_utterance_id  # noqa: E402
 from intake.session import SessionStore  # noqa: E402
@@ -46,6 +47,16 @@ def speaker_of(ln: dict) -> str | None:
     if not s:
         return None
     return f"spk_{ord(s) - 64}" if len(s) == 1 and s.isalpha() else str(s)
+
+
+def locate(text: str, words: list, pad: float = 0.3) -> tuple[float, float] | None:
+    """text の単語列と STT の単語列を整列し、一致した最初と最後の単語の時刻を返す（前後に pad 秒）。"""
+    hw = [(norm_words(w.w) or [""])[0] for w in words]
+    ops = [(i, j) for op, i, j in edit_align(norm_words(text), hw) if op == "match"]
+    if len(ops) < 3:
+        return None
+    a, b = words[ops[0][1]], words[ops[-1][1]]
+    return max(0.0, a.t0 - pad), b.t1 + pad
 
 
 def write_run(store: SessionStore, sid: str, run: str, utts: list[Utterance], ref: dict, group: str | None, source: str,
@@ -72,6 +83,7 @@ def main(argv=None):
     ap.add_argument("--group", help="話者の属性（例 japanese / native）。閲覧画面で群ごとに切り替える")
     ap.add_argument("--lang", default=None)
     ap.add_argument("--sessions-dir", default="sessions")
+    ap.add_argument("--locate-run", help="t0/t1 の無い行を、この run の単語列から探して決める")
     a = ap.parse_args(argv)
 
     store = SessionStore(a.sessions_dir)
@@ -83,6 +95,18 @@ def main(argv=None):
     wav = store.audio_path(sid)
     dur = sf.info(str(wav)).duration if wav.exists() else None
     lines = ref["lines"]
+    if a.locate_run:
+        rd = store.run_dir(sid, a.locate_run)
+        hw = []
+        if (rd / "utterances.jsonl").exists():
+            for x in (rd / "utterances.jsonl").read_text(encoding="utf-8").splitlines():
+                if x.strip():
+                    hw.extend(Utterance.from_dict(json.loads(x)).words)
+        hw.sort(key=lambda w: w.t0)
+        for ln in lines:
+            if ln.get("t0") is None and ln.get("text") and (span := locate(ln["text"], hw)):
+                ln["t0"], ln["t1"] = round(span[0], 3), round(span[1], 3)
+                ln["located_by"] = a.locate_run
 
     def base(i, ln, phones, src, model):
         t0 = float(ln.get("t0", 0.0))

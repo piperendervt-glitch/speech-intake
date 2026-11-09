@@ -39,12 +39,17 @@ class G2P:
         else:
             raise ValueError(f"g2p engine: {engine!r}")
 
-    def word(self, w: str) -> list[str]:
+    def word(self, w: str, pos: str | None = None) -> list[str]:
         core = "".join(_WORD.findall(w.replace("’", "'")))
         if not core:
             return []
         if self.engine == "g2p_en":
-            # 語ごとに CMUdict の第 1 候補、無ければ学習済みモデルの推定（文脈による読み分けはしない）
+            # 同形異音語（read, live など）は品詞で読み分ける（g2p_en と同じ表）。それ以外は CMUdict の第 1 候補、
+            # 無ければ学習済みモデルの推定
+            homo = getattr(self._g, "homograph2features", {}).get(core.lower())
+            if homo and pos:
+                pron1, pron2, pos1 = homo
+                return list(pron1 if pos.startswith(pos1) else pron2)
             cmu = getattr(self._g, "cmu", None)
             prons = cmu.get(core.lower()) if cmu is not None else None
             if prons:
@@ -58,8 +63,20 @@ class G2P:
                              capture_output=True, text=True, encoding="utf-8", check=True).stdout
         return [p for p in out.replace("\n", " ").split(" ") if p.strip()]
 
+    def _pos(self, words: list[str]) -> list[str | None]:
+        if self.engine != "g2p_en":
+            return [None] * len(words)
+        try:
+            from nltk import pos_tag  # noqa: PLC0415
+
+            cores = ["".join(_WORD.findall(w.replace("’", "'"))) or "," for w in words]
+            return [t for _, t in pos_tag(cores)]
+        except Exception:  # noqa: BLE001
+            return [None] * len(words)
+
     def phones(self, text: str) -> list[Phone]:
         out: list[Phone] = []
-        for i, w in enumerate(words_of(text)):
-            out.extend(Phone(ph=p, w=i) for p in self.word(w))
+        words = words_of(text)
+        for i, (w, pos) in enumerate(zip(words, self._pos(words))):
+            out.extend(Phone(ph=p, w=i) for p in self.word(w, pos))
         return out
