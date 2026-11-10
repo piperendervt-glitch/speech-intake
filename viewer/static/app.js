@@ -129,6 +129,7 @@ function prepEvents(r) {
     else if (e.type === "speech_end") g.end = e;
     else if (e.type === "speech_dropped") g.drop = e;
     else if (e.type === "utterance") g.utts.push(e);
+    else if (e.type === "partial") (g.partials = g.partials || []).push(e);
   }
   const segs = [...by.values()].sort((a, b) => a.seg - b.seg);
   for (const g of segs) {
@@ -140,6 +141,8 @@ function prepEvents(r) {
       g.uttAt = u.t_emit != null ? u.t_emit : g.endAt != null ? g.endAt + (u.t_unix - u.vad_close_unix) : null;
     }
     if (g.drop) g.dropAt = g.drop.t_emit != null ? g.drop.t_emit : g.endAt;
+    // 暫定の文字（段11）：実時間の run は t_emit、fast の run は暫定に使った音声の終わり t1 + STT の時間
+    for (const p of g.partials || []) p.at = p.t_emit != null ? p.t_emit : p.t1 + (p.stt_ms || 0) / 1000;
   }
   return segs;
 }
@@ -627,6 +630,7 @@ function drawEvents(ctx, w, L, r, hits, layout) {
     mark(g.endAt, css("--ev-end"), `speech_end（seg ${g.seg}）`, g.end, "end");
     if (g.uttAt != null) mark(g.uttAt, css("--ev-utt"), `utterance（seg ${g.seg}）`, g.utts, "utt");
     if (g.drop) mark(g.dropAt, css("--ev-drop"), `speech_dropped（seg ${g.seg}）`, g.drop, "drop");
+    for (const p of g.partials || []) mark(p.at, css("--ev-partial"), `partial（seg ${g.seg}）：${p.text}`, p, "drop");
   }
 }
 

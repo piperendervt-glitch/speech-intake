@@ -12,9 +12,22 @@ DEFAULTS: dict[str, Any] = {
     "sessions_dir": "sessions",
     "run_name": "default",
     "sample_rate": 16000,
-    "capture": {"provider": "sounddevice", "device": None, "block_ms": 32, "latency": None},
+    "capture": {
+        "provider": "sounddevice",  # sounddevice（マイク）/ ja1_udp（subvocal-robot の airpods.bat が送る JA1 行。段11）
+        "device": None,
+        "block_ms": 32,
+        "latency": None,
+        "udp": {"host": "127.0.0.1", "port": 9750, "source": None},  # ja1_udp の待ち受け（localhost のみ）
+    },
     "replay": {"speed": "fast", "chunk_ms": 32},
-    "pipeline": {"stt_thread": False},  # true: STT 以降を別スレッドで（VAD の通知が STT を待たない。段10）
+    "pipeline": {
+        "stt_thread": False,  # true: STT 以降を別スレッドで（VAD の通知が STT を待たない。段10）
+        # 暫定の文字（partial。段11）。区間が開いている間に、そこまでの音声を STT に通して配る。stt_thread: true のときだけ動く
+        #   every_ms    話している間、この間隔で出す（0 = 出さない）
+        #   silence_ms  黙ってからこの長さで 1 回出す（null = 出さない。min_silence_ms より短くする）
+        #   min_ms      区間がこの長さに届くまでは出さない
+        "partial": {"every_ms": 0, "silence_ms": None, "min_ms": 300},
+    },
     "vad": {"provider": "none"},
     "stt": {"provider": "none"},
     "speaker": {"provider": "none"},
@@ -69,6 +82,7 @@ def check_local_only(cfg: dict[str, Any]) -> None:
     for name, host in (
         ("viewer.host", cfg["viewer"]["host"]),
         ("sink.websocket.host", cfg["sink"]["websocket"]["host"]),
+        ("capture.udp.host", ((cfg.get("capture") or {}).get("udp") or {}).get("host", "127.0.0.1")),
     ):
         if host not in LOCAL_HOSTS:
             raise ValueError(f"{name}={host!r}: 待ち受けは localhost のみ許可（{LOCAL_HOSTS}）")

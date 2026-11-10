@@ -297,3 +297,51 @@ speech_start(seg) → speech_end(seg) → utterance(seg) を 1 つ以上  また
 | `pipeline.stt_thread` | true | STT を別スレッドで（STT の最中も始まりの通知が止まらない） |
 
 コマンドラインで `--set vad.start_frames=3` のように上書きできる。
+
+### 5.5 段11 で足したもの（turn-bench の申し送り `docs/HANDOFF_to_speech_intake_JA.md` への対応）
+
+**`hello` の絶対パス**：`info.sessions_dir`（セッションの置き場所の絶対パス）と `info.session_dir`（このセッションのフォルダ）。
+`info.config.sessions_dir` は設定に書いたまま（相対パスのことがある）。録音は `<session_dir>/audio.wav`。
+
+**暫定の文字 `partial`**（`pipeline.partial` を設定したときだけ。`config/live_partial.yaml`）：
+
+| type | 中身 | いつ |
+|---|---|---|
+| `partial` | `seg`, `t0`, `t1`, `text`, `lang`, `reason`, `stt_ms`, `t_unix` | 区間が開いている間に、`t0`〜`t1` の音声を STT に通した結果 |
+
+- `reason: "silence"`：黙り始めてから `partial.silence_ms` 経った時点で 1 回（`t1` は黙り始めた所）。
+  `min_silence_ms` より短くしておくと、`speech_end` より前に届く。また話し始めたら次の黙りでもう 1 回出る。
+- `reason: "interval"`：話している間、`partial.every_ms` ごと（`t1` はその時点）。
+- **発話レコードではない**。`utterances.jsonl` にも再送にも入らない（`trace/events.jsonl` には残る）。確定は従来どおり `utterance`。
+  暫定の `text` と後の `utterance` の `text` は違うことがある（Whisper は続きの音声で前の語を言い直す）。
+- 区間が閉じた後には出さない。`speech_dropped` になる区間でも出ることがある。
+- STT のスレッドが空いているときだけ頼む（`pipeline.stt_thread: true` が要る）。暫定の STT の最中に区間が閉じると、
+  確定の `utterance` はその分待たされる（多くて暫定 1 回分）。
+
+**購読側からの VAD の設定変更**：購読側から次のメッセージを送ると、次のチャンクから効く。
+
+```json
+{"type": "set", "vad": {"min_silence_ms": 200}}
+{"type": "set", "vad": {"start_frames": 3}}
+```
+
+- 変えられるのは `vad.min_silence_ms`（32〜5000）と `vad.start_frames`（1〜50）だけ。範囲の外・他の項目は、送った購読者に
+  `{"type": "error", "error": "..."}` が返り、何も変わらない。
+- **接続ごとではなく speech-intake 全体に効く**（VAD は 1 つで、区間は全員に同じものを配るため）。変わったら全員に
+  `{"type": "config", "vad": {"min_silence_ms", "start_frames"}, "changed": {...}, "t_unix"}` が届く（`trace/events.jsonl` にも残る）。
+  切断しても元には戻らない。次の run（`hello`）では設定ファイルの値に戻る。
+- `hello` の `info.config.vad` は起動時の値のまま。途中で変えたかは `config` の通知で分かる。
+
+**JA1 の UDP を入力にする**（`record --input ja1`、または `capture.provider: ja1_udp`）：
+
+- subvocal-robot の `airpods.bat` が `127.0.0.1:9750` に送る `JA1,<source>,<seq>,<t>,16000,<base64 int16>` の行を受け、
+  マイクと同じく `audio.wav` に書きつつ各段に流す。JR1 行（頭の動き）は読み飛ばす。待ち受けは localhost のみ。
+- **同じポートを 2 つのプログラムでは受けられない**。jawrec / jawchat と同時に使うなら、airpods.bat に `--udp 127.0.0.1:9751`、
+  speech-intake に `--set capture.udp.port=9751` のように分ける（airpods.bat の送り先は 1 つなので、両方に同時には届かない）。
+- 送り手は最初に届いた `source` に決まる（`--set capture.udp.source=airpods-win` で固定）。
+- パケットの抜け（`seq` の飛び）や送り手の止まりは、送り手の時計 `t` の飛びを見て無音で埋める。セッション秒が実時間からずれないように。
+  抜けた数と埋めた秒は `session.json` の `ja1` に残る。
+- 時計の対応：`session.json` の `t0_unix`（最初の行が届いた壁時計 − 1 行の長さ）と `ja1_t0`（その行の送り手の時計 `t`。airpods.bat は
+  `time.monotonic`）。送り手の時計 `t` はセッション秒 `t - ja1_t0`（無音で埋めた分を含めてそのまま対応する）。
+- AirPods の HFP は 16 kHz（mSBC）か 8 kHz を 16 kHz に直したもの（CVSD）。電話の帯域なので、マイクより STT の誤りが増える見込み（未確認）。
+

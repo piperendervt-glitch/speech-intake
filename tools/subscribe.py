@@ -4,6 +4,9 @@
   python tools/subscribe.py --events            # 発話の始まり・終わりの通知（speech_start / speech_end / speech_dropped）も時刻つきで出す
   python tools/subscribe.py --trace             # VAD 区間・話者分離の区間も受け取る
   python tools/subscribe.py --out records.jsonl # 受け取った発話レコードをファイルにも書く（revise は置き換え）
+  python tools/subscribe.py --events --min-silence-ms 200   # 繋いだときに VAD の min_silence_ms を変える（段11。全員に効く）
+
+暫定の文字（partial。段11、pipeline.partial を設定したときだけ）は --events で出る。
 
 speech-intake がまだ起動していない・止まったときは、1 秒ごとに繋ぎ直す（Ctrl+C で終わる）。
 
@@ -25,11 +28,11 @@ def stamp(now: float, sent: float | None) -> str:
     return f"{s} (+{(now - sent) * 1000:4.0f}ms)" if sent else f"{s}         "
 
 
-async def main(url: str, trace: bool, out: str | None, events: bool) -> None:
+async def main(url: str, trace: bool, out: str | None, events: bool, sets: dict | None = None) -> None:
     waiting = False
     while True:
         try:
-            await subscribe(url, trace, out, events)
+            await subscribe(url, trace, out, events, sets)
             waiting = False
         except aiohttp.ClientConnectionError:
             if not waiting:
@@ -38,18 +41,20 @@ async def main(url: str, trace: bool, out: str | None, events: bool) -> None:
         await asyncio.sleep(1)
 
 
-async def subscribe(url: str, trace: bool, out: str | None, events: bool) -> None:
+async def subscribe(url: str, trace: bool, out: str | None, events: bool, sets: dict | None = None) -> None:
     records: dict[str, dict] = {}
     async with aiohttp.ClientSession() as cs:
         async with cs.ws_connect(url + ("?trace=1" if trace else "")) as ws:
             print(f"# 接続 {url}", flush=True)
+            if sets:
+                await ws.send_str(json.dumps({"type": "set", "vad": sets}))
             async for msg in ws:
                 now = time.time()
                 m = json.loads(msg.data)
                 t = m["type"]
                 if t == "hello":
                     i = m["info"]
-                    print(f"# session={i['session']} run={i['run']} providers={i.get('providers')}")
+                    print(f"# session={i['session']} run={i['run']} providers={i.get('providers')} dir={i.get('session_dir')}")
                     records.clear()
                 elif t in ("speech_start", "speech_end", "speech_dropped"):
                     if not events:
@@ -61,6 +66,14 @@ async def subscribe(url: str, trace: bool, out: str | None, events: bool) -> Non
                     else:
                         body = f"seg={m['seg']:<4} {m['reason']}"
                     print(f"{stamp(now, m.get('t_unix'))} {t:<14} {body}", flush=True)
+                elif t == "partial":
+                    if events:
+                        body = f"seg={m['seg']:<4} {m['t0']:8.2f}-{m['t1']:8.2f}  {m['reason']:<8} STT {m['stt_ms']}ms  {m['text']}"
+                        print(f"{stamp(now, m.get('t_unix'))} {t:<14} {body}", flush=True)
+                elif t == "config":
+                    print(f"# config {m['vad']}（変更 {m['changed']}）", flush=True)
+                elif t == "error":
+                    print(f"# error {m['error']}", flush=True)
                 elif t == "utterance":
                     r = m["record"]
                     records[r["id"]] = r
@@ -89,8 +102,11 @@ if __name__ == "__main__":
     ap.add_argument("--trace", action="store_true")
     ap.add_argument("--events", action="store_true", help="speech_start / speech_end / speech_dropped を時刻つきで出す")
     ap.add_argument("--out")
+    ap.add_argument("--min-silence-ms", type=int, help="繋いだときに vad.min_silence_ms を変える（speech-intake 全体に効く）")
+    ap.add_argument("--start-frames", type=int, help="繋いだときに vad.start_frames を変える")
     a = ap.parse_args()
+    sets = {k: v for k, v in (("min_silence_ms", a.min_silence_ms), ("start_frames", a.start_frames)) if v is not None}
     try:
-        asyncio.run(main(a.url, a.trace, a.out, a.events))
+        asyncio.run(main(a.url, a.trace, a.out, a.events, sets))
     except KeyboardInterrupt:
         pass

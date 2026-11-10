@@ -1,0 +1,50 @@
+# 段11：live.yaml ＋ 暫定の文字（partial）。区間が閉じる前に、そこまでの音声の文字を配る（turn-bench の要望）。
+#   python -m intake -c config/live_partial.yaml record
+#   python tools/subscribe.py --events
+# 暫定は発話レコードではない（utterances.jsonl には入らない）。STT を余分に回すので、GPU の空きが要る。
+# 暫定の STT が動いている最中に区間が閉じると、確定の utterance はその分（多くて暫定 1 回分）待たされる（REPORT_段11）。
+run_name: live_partial
+
+capture:
+  block_ms: 32
+  latency: low
+
+replay:
+  speed: realtime
+  chunk_ms: 32
+
+pipeline:
+  stt_thread: true         # 暫定は STT のスレッドが要る（false だと出ない）
+  partial:
+    silence_ms: 150        # 黙ってから 150 ms で 1 回（min_silence_ms 300 より前）。null で出さない
+    every_ms: 0            # 話している間の定期（例 700）。0 で出さない
+    min_ms: 300            # 区間がこの長さになるまでは出さない
+
+vad:
+  provider: silero
+  threshold: 0.5
+  start_frames: 2
+  min_silence_ms: 300
+  min_speech_ms: 250
+  speech_pad_ms: 100
+  max_speech_s: 28
+
+stt:
+  provider: faster_whisper
+  model: large-v3-turbo
+  device: auto
+  language: ja
+  beam_size: 1
+  one_per_vad: true
+
+speaker:
+  provider: none
+phones:
+  provider: none
+
+sink:
+  jsonl: true
+  websocket:
+    enabled: true
+    host: 127.0.0.1
+    port: 8766

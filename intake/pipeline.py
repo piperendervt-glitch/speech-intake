@@ -7,6 +7,12 @@
 （speech_start / speech_end / speech_dropped）。pipeline.stt_thread: true なら STT 以降を別スレッドで回し、
 STT の最中も VAD が止まらないようにする（次の speech_start が STT の終わりを待たない）。
 通知と発話レコードの時刻の記録は trace/events.jsonl（閲覧画面で遅れを見る）。
+
+段11（turn-bench からの要望）：
+  - info（hello / run.json）に sessions_dir / session_dir の絶対パス
+  - 暫定の文字 partial：区間が開いている間に、そこまでの音声を STT に通して sink.event() で配る（pipeline.partial）。
+    発話レコードではない（utterances.jsonl には入らない。確定するのは従来どおり utterance）
+  - 購読側からの {"type": "set", "vad": {"min_silence_ms": 200}}：動かしたまま VAD の設定を変え、config の通知で知らせる
 """
 
 from __future__ import annotations
@@ -16,6 +22,7 @@ import threading
 import time
 from collections import deque
 from datetime import datetime
+from pathlib import Path
 from typing import Any, Iterable
 
 import numpy as np
@@ -55,6 +62,15 @@ class AudioBuffer:
         return allx[a - self._start : b - self._start]
 
 
+def _check_vad_param(k: str, v: Any) -> None:
+    ok = {"min_silence_ms": lambda x: isinstance(x, (int, float)) and 32 <= x <= 5000,
+          "start_frames": lambda x: isinstance(x, int) and 1 <= x <= 50}
+    if k not in ok:
+        raise ValueError(f"動かしたまま変えられるのは vad.min_silence_ms（32〜5000）/ vad.start_frames（1〜50）だけ: {k!r}")
+    if isinstance(v, bool) or not ok[k](v):
+        raise ValueError(f"vad.{k} の値が範囲の外: {v!r}（min_silence_ms は 32〜5000、start_frames は 1〜50 の整数）")
+
+
 class Pipeline:
     def __init__(self, cfg: dict[str, Any], session: str, sink: Any, run_name: str | None = None):
         self.cfg = cfg
@@ -80,12 +96,25 @@ class Pipeline:
         self.live = False  # 音声が実時間で届く（mic / replay:realtime）。通知の時刻を音声の時計に直して残す
         self._clock0: float | None = None  # セッション 0 秒に当たる壁時計（チャンクが届いた時刻 - チャンクの終わり、の最小）
         self._close_unix: dict[int, float] = {}
+        pc = (cfg.get("pipeline") or {}).get("partial") or {}
+        self.partial_every = float(pc.get("every_ms") or 0) / 1000
+        self.partial_silence = None if pc.get("silence_ms") is None else float(pc["silence_ms"]) / 1000
+        self.partial_min = float(pc.get("min_ms", 300)) / 1000
+        self.partial_on = (self.partial_every > 0 or self.partial_silence is not None) and self.stt_thread
+        self._p_state: dict[str, Any] | None = None  # 開いている区間について、暫定を最後に頼んだ時刻など
+        self._jobs = 0  # STT のスレッドに頼んで、まだ終わっていない仕事の数
+        self._jobs_lock = threading.Lock()
+        self._inbox: list[dict[str, Any]] = []  # 購読側から届いた set（次のチャンクで反映する）
 
     def info(self, source: str) -> dict[str, Any]:
         public = {k: v for k, v in self.cfg.items() if not k.startswith("_")}
+        root = Path(self.cfg.get("sessions_dir", "sessions")).resolve()
         return {
             "session": self.session,
             "run": self.run_name,
+            # 絶対パス（段11）。別のフォルダから起動した利用側が録音を探せるように。config.sessions_dir は設定に書いたまま
+            "sessions_dir": str(root),
+            "session_dir": str(root / self.session),
             "source": source,
             "started_at": datetime.now().astimezone().isoformat(timespec="seconds"),
             "intake_version": __version__,
@@ -126,10 +155,15 @@ class Pipeline:
         if not self.stt_thread:
             self._transcribe(*job)
             return
+        self._submit(("final", *job))
+
+    def _submit(self, job: tuple) -> None:
         if self._worker is None:
             self._q = queue.Queue()
             self._worker = threading.Thread(target=self._work, name="intake-stt", daemon=True)
             self._worker.start()
+        with self._jobs_lock:
+            self._jobs += 1
         self._q.put(job)
 
     def _work(self) -> None:
@@ -138,11 +172,84 @@ class Pipeline:
             if job is None:
                 return
             try:
-                self._transcribe(*job)
+                if job[0] == "partial":
+                    self._partial(*job[1:])
+                else:
+                    self._transcribe(*job[1:])
                 self._drain((self.stt, self.phones))
             except BaseException as e:  # noqa: BLE001
                 self._err = e
                 return
+            finally:
+                with self._jobs_lock:
+                    self._jobs -= 1
+
+    # ---- 暫定の文字（段11） ----
+    def _maybe_partial(self, now_t: float) -> None:
+        """区間が開いていて、STT のスレッドが空いていれば、そこまでの音声の文字起こしを頼む。
+
+        空いていないときは頼まない（暫定が確定の utterance を待たせる量を、多くて暫定 1 回分にとどめる）。
+        """
+        op = getattr(self.vad, "open_segment", lambda: None)()
+        if op is None:
+            self._p_state = None
+            return
+        seg, t0, silent_from = op
+        st = self._p_state
+        if st is None or st["seg"] != seg:
+            st = self._p_state = {"seg": seg, "last": t0, "silence_done": False}
+        if silent_from is None:
+            st["silence_done"] = False
+        reason = end = None
+        if silent_from is not None:
+            if self.partial_silence is not None and not st["silence_done"] and now_t - silent_from >= self.partial_silence:
+                reason, end = "silence", silent_from
+        elif self.partial_every > 0 and now_t - st["last"] >= self.partial_every:
+            reason, end = "interval", now_t
+        if reason is None or end - t0 < self.partial_min or self._jobs > 0:
+            return
+        st["last"] = now_t
+        if reason == "silence":
+            st["silence_done"] = True
+        a = max(t0 - getattr(self.vad, "pad", 0.0), 0.0)
+        self._submit(("partial", seg, a, end, self.buf.slice(a, end).copy(), reason, time.time()))
+
+    def _partial(self, seg: int, t0: float, t1: float, audio: np.ndarray, reason: str, asked_unix: float) -> None:
+        res = self.stt.transcribe(audio, t0, self.sr)
+        if not res:
+            return
+        lang = res[0].lang
+        text = ("" if (lang or "").startswith(("ja", "zh")) else " ").join(r.text for r in res)
+        now = time.time()
+        self._notify({"type": "partial", "seg": seg, "t0": round(t0, 3), "t1": round(t1, 3), "text": text, "lang": lang,
+                      "reason": reason, "stt_ms": round((now - asked_unix) * 1000)}, now)
+        self.stats["partials"] = self.stats.get("partials", 0) + 1
+
+    # ---- 購読側からのメッセージ（WebSocket のスレッドから呼ばれる） ----
+    def on_message(self, m: dict[str, Any]) -> None:
+        """{"type": "set", "vad": {"min_silence_ms": 200}} は VAD の設定変更、それ以外は speaker provider に渡す。
+
+        形の誤りはここで例外にする（送ってきた購読者に error が返る）。反映は次のチャンクで（VAD のスレッドで変える）。
+        """
+        if isinstance(m, dict) and m.get("type") == "set":
+            vad = m.get("vad")
+            if set(m) - {"type", "vad"} or not isinstance(vad, dict) or not vad:
+                raise ValueError('set で変えられるのは vad だけ：{"type": "set", "vad": {"min_silence_ms": 200}}')
+            if not hasattr(self.vad, "set_params"):
+                raise ValueError(f"この VAD（{self.vad.name}）は動かしたままの変更に対応していない")
+            for k, v in vad.items():  # 値の検査だけ先に（同じ値を入れ直して確かめる）
+                _check_vad_param(k, v)
+            self._inbox.append(dict(vad))
+            return
+        fn = getattr(self.speaker, "on_message", None)
+        if fn:
+            fn(m)
+
+    def _apply_sets(self) -> None:
+        while self._inbox:
+            changed = self._inbox.pop(0)
+            now = self.vad.set_params(**changed)
+            self._notify({"type": "config", "vad": now, "changed": {"vad": changed}})
 
     def _transcribe(self, seg, audio: np.ndarray, close_unix: float) -> None:
         new: list[Utterance] = []
@@ -196,8 +303,12 @@ class Pipeline:
         self._out("audio", chunk)
         with self._spk_lock:
             self.speaker.feed(chunk)
+        if self._inbox:
+            self._apply_sets()
         segs = self.vad.feed(chunk)
         self._vad_events()  # STT より先に配る
+        if self.partial_on:
+            self._maybe_partial(chunk.t1)
         self._drain((self.vad, self.speaker) if self.stt_thread else None)
         for seg in segs:
             self._segment(seg)
@@ -228,7 +339,7 @@ class Pipeline:
 
     def run(self, chunks: Iterable[AudioChunk], source: str) -> dict[str, Any]:
         t_start = time.monotonic()
-        self.live = source == "mic" or source.endswith(":realtime")
+        self.live = source in ("mic", "ja1_udp") or source.endswith(":realtime")
         self._out("start", self.info(source))
         try:
             for c in chunks:

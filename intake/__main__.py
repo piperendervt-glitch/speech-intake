@@ -1,6 +1,7 @@
 """コマンドの入口。
 
   python -m intake record   [-c config.yaml] [--device N] [--seconds S]   マイクから録音（同時に各段を流す）
+  python -m intake record   --input ja1 [-c config.yaml]                 JA1 行の UDP（AirPods など）から録音
   python -m intake replay   SESSION [-c config.yaml] [--run NAME] [--speed fast|realtime]
   python -m intake import   FILE [--label X] [--replay -c config.yaml]   外部の音声をセッションにする
   python -m intake sessions                                             セッション一覧
@@ -51,8 +52,8 @@ def _run(cfg, store, sid, run, source, chunks):
         sinks.append(ws)
     cfg = {**cfg, "_session_dir": str(store.dir(sid))}
     p = Pipeline(cfg, sid, MultiSink(sinks), run_name=run)
-    if ws:  # 購読側から届く装着者区間などを speaker provider に渡す
-        ws.on_message = getattr(p.speaker, "on_message", None)
+    if ws:  # 購読側から届く set（VAD の設定変更）や装着者区間を渡す
+        ws.on_message = p.on_message
     print(f"[intake] session={sid} run={run} vad={p.vad.name} stt={p.stt.name} speaker={p.speaker.name}", file=sys.stderr)
     stats = p.run(chunks, source)
     print(json.dumps({"session": sid, "run": run, **stats}, ensure_ascii=False))
@@ -76,20 +77,33 @@ def _hold(a):
 
 
 def cmd_record(a, cfg, store):
-    from .capture import MicCapture  # noqa: PLC0415
-
     sid = a.session or new_session_id()
-    dev = a.device if a.device is not None else cfg["capture"].get("device")
-    if isinstance(dev, str) and dev.isdigit():
-        dev = int(dev)
-    cap = MicCapture(store, sid, sample_rate=cfg["sample_rate"], device=dev, block_ms=cfg["capture"]["block_ms"],
-                     latency=cfg["capture"].get("latency"))
+    prov = a.input or cfg["capture"].get("provider", "sounddevice")
+    if prov in ("ja1_udp", "ja1"):  # subvocal-robot の airpods.bat などが送る JA1 行（段11）
+        from .capture.ja1 import Ja1UdpCapture  # noqa: PLC0415
+
+        udp = cfg["capture"].get("udp") or {}
+        cap = Ja1UdpCapture(store, sid, sample_rate=cfg["sample_rate"], host=udp.get("host", "127.0.0.1"),
+                            port=int(udp.get("port", 9750)), source=udp.get("source"))
+        source = "ja1_udp"
+        print(f"[intake] JA1 を待ち受け中 udp://{cap.host}:{cap.port}", file=sys.stderr)
+    elif prov in ("sounddevice", "mic"):
+        from .capture import MicCapture  # noqa: PLC0415
+
+        dev = a.device if a.device is not None else cfg["capture"].get("device")
+        if isinstance(dev, str) and dev.isdigit():
+            dev = int(dev)
+        cap = MicCapture(store, sid, sample_rate=cfg["sample_rate"], device=dev, block_ms=cfg["capture"]["block_ms"],
+                         latency=cfg["capture"].get("latency"))
+        source = "mic"
+    else:
+        raise SystemExit(f"capture.provider={prov!r} は未登録。候補: sounddevice / ja1_udp")
     cap.prepare()  # run の出力（runs/<run>/）より先にセッションを作る
     signal.signal(signal.SIGINT, lambda *_: cap.stop())
     if a.seconds:  # 録音した長さで止める（モデルの読み込みの時間は数えない）
         cap.max_samples = int(a.seconds * cfg["sample_rate"])
     print(f"[intake] 録音中… Ctrl+C で止める → {store.audio_path(sid)}", file=sys.stderr)
-    _run(cfg, store, sid, a.run or cfg["run_name"], "mic", cap.chunks())
+    _run(cfg, store, sid, a.run or cfg["run_name"], source, cap.chunks())
     signal.signal(signal.SIGINT, signal.default_int_handler)
     _hold(a)
 
@@ -176,6 +190,7 @@ def main(argv=None):
 
     r = sub.add_parser("record", help="マイクから録音")
     r.add_argument("--device")
+    r.add_argument("--input", choices=["mic", "ja1"], help="入口（省略時は設定の capture.provider）。ja1 = JA1 行の UDP（AirPods など）")
     r.add_argument("--seconds", type=float)
     r.add_argument("--session")
     r.add_argument("--run")

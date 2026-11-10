@@ -1,6 +1,6 @@
 """待ち受けが localhost だけかを確かめる（依頼文 §7：段1と段5で確認）。
 
-  python -m intake netcheck   … intake を動かしている Python プロセスの LISTEN ソケットを全部出し、
+  python -m intake netcheck   … intake を動かしている Python プロセスの LISTEN ソケット（と UDP の受け口）を全部出し、
                                  127.0.0.1 / ::1 以外があれば NG を返す。
 psutil が必要（pip install psutil）。
 """
@@ -26,7 +26,10 @@ def listening_sockets() -> list[dict]:
                 # Windows の一部のビルドでは待ち受けソケットの状態が LISTEN でなく NONE で返る。
                 # 相手の無い TCP ソケットは待ち受けとみなす（見落とすより多めに出す）
                 if c.status == psutil.CONN_LISTEN or (c.status == psutil.CONN_NONE and not c.raddr):
-                    out.append({"pid": p.pid, "cmd": cmd[:80], "addr": c.laddr.ip, "port": c.laddr.port})
+                    out.append({"pid": p.pid, "cmd": cmd[:80], "addr": c.laddr.ip, "port": c.laddr.port, "proto": "tcp"})
+            for c in p.net_connections(kind="udp"):  # JA1 の受け口（段11）。相手の無い UDP ソケットは受け口
+                if not c.raddr:
+                    out.append({"pid": p.pid, "cmd": cmd[:80], "addr": c.laddr.ip, "port": c.laddr.port, "proto": "udp"})
         except (psutil.NoSuchProcess, psutil.AccessDenied):
             continue
     return out
@@ -41,7 +44,7 @@ def main() -> int:
     for s in socks:
         ok = s["addr"] in LOOPBACK
         bad += not ok
-        print(f"{'OK' if ok else 'NG'}  {s['addr']}:{s['port']}  pid={s['pid']}  {s['cmd']}")
+        print(f"{'OK' if ok else 'NG'}  {s.get('proto', 'tcp')} {s['addr']}:{s['port']}  pid={s['pid']}  {s['cmd']}")
     print("→ すべて localhost のみ" if not bad else f"→ localhost 以外で待ち受けているものが {bad} 件")
     return 1 if bad else 0
 
