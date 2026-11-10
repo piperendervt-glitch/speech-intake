@@ -21,7 +21,8 @@ python -m intake models speaker          # 話者分離モデル（GitHub, 約 4
 pip install -e .[samples] && python -m unidic download   # 日本語辞書（unidic）が別に要る
 python tools/make_samples.py --engine kokoro
 
-python -m intake devices                 # 入力デバイス一覧
+python -m intake devices                 # 入力機器の一覧（ホスト API・既定のレート・開けるか・Bluetooth らしいか）
+python -m intake devcheck --device 名前   # 入力機器の診断（帯域・頭の欠け・雑音・途切れ。段11）
 python -m intake record                  # マイクから録音（Ctrl+C で止める）→ sessions/<日時>/audio.wav
 python -m intake import 会話.m4a --replay  # 手元の音声ファイルをセッションにして流し直す
 python -m intake replay <session>        # 保存した録音を流し直す（--speed realtime で実時間）
@@ -110,6 +111,80 @@ python tools/subscribe.py --events --min-silence-ms 200          # 繋いだと�
 ```
 
 `hello` の `info` に `sessions_dir` / `session_dir`（絶対パス）が入る。詳しくは `docs/INTEGRATION_JA.md` §5.5、報告は `docs/REPORT_段11.md`。
+
+## Bluetooth ヘッドセットを使う（段11）
+
+AirPods などの Bluetooth ヘッドセットを、Windows 標準の Bluetooth（アダプタ）で PC につなぎ、そのマイクを入力にする。
+speech-intake から見れば普通の入力機器（subvocal-robot の airpods.bat を通す `record --input ja1` とは別の口。上の節）。
+
+**1. ペアリング**：Windows の「設定 → Bluetooth とデバイス → デバイスを追加 → Bluetooth」。AirPods はケースを開けて裏のボタンを
+長押し（ライトが白く点滅）。ペアリングはこちらからは操作しない。
+
+**2. Stereo と Hands-Free の違い**：Windows には同じヘッドセットが 2 つの顔で出る。
+
+| 名前の例 | Bluetooth の接続 | 音 | マイク |
+|---|---|---|---|
+| ヘッドホン (AirPods **Stereo**) | A2DP | 高音質の出力だけ | 無い |
+| ヘッドセット (AirPods **Hands-Free**) | HFP（通話用） | 出力も入力も電話の音質 | **ある**（16 kHz の広帯域か、8 kHz の狭帯域） |
+
+マイクを開くと接続が HFP に切り替わり、その間は音楽の再生も電話の音質になる（数百 ms〜1 秒ほど音が途切れる）。
+広帯域（mSBC）になるか狭帯域（CVSD）になるかは、アダプタ・ドライバ・Windows の版・ヘッドセットの組み合わせで決まり、
+Windows の画面からは分からない。なので実際に録って中身で確かめる（下の `devcheck`）。
+
+**3. 機器を選ぶ**：
+
+```bash
+python -m intake devices
+```
+
+同じ AirPods が API ごと（MME / Windows DirectSound / Windows WASAPI / Windows WDM-KS）に何行も出る。
+`開` の列が ○（16 kHz で開ける）か △（既定のレートでなら開ける。取り込みで 16 kHz に直す）の行が使える。`BT` は名前から
+Bluetooth らしい行。**MME の Hands-Free の行**から試すのがよい（名前が 31 文字で切れていることがある）。
+番号は抜き差しで変わるので、設定には名前の一部を書く：`capture.device: "AirPods@MME"`（`@` の後ろはホスト API の名前の一部）。
+複数当たると候補を出して止まる。
+
+**4. 帯域を確かめる**：
+
+```bash
+python -m intake devcheck --device "AirPods@MME" --label airpods     # 8 秒録る。画面の英文を読む
+python -m intake devcheck --device "Realtek@MME" --label pcmic       # 比べる相手（PC のマイク）
+python -m intake view    # セッション airpods を開き、比較のセッションに pcmic を選ぶ。「スペクトログラム」をオン
+```
+
+読む英文（「s」「sh」「th」は 4 kHz より上に成分が出る）：
+
+- She sells sea shells by the seashore.
+- This fish shop sells six thick socks.
+- Sixty-six thistles, three thin sheets.
+
+判定は「広帯域らしい／狭帯域らしい／判断しにくい」の目安だけ。**決めるのはスペクトログラム**：4 kHz の点線より上に
+「s」「sh」の縦の筋が見えれば広帯域、点線より上が真っ黒なら狭帯域。結果は `sessions/<session>/devcheck.json` にも残る
+（頭の欠け＝マイクを開いた直後の無音の長さ、雑音の大きさ、途切れの位置）。
+
+**5. 録る**：
+
+```bash
+python -m intake -c config/live.yaml --set capture.device="AirPods@MME" record   # speech_start → utterance が届く
+```
+
+PC のマイクで同じ発話を録っておくと、閲覧画面で上下に並べて、文字起こしと単語の `p` の違いを見られる（比較のセッション）。
+録音中に機器が消えたら（電池切れ・接続切れ）、それまでを保存して止まる（`session.json` の `ended_by: device_lost`）。
+
+**6. 入力の遅れを測る**（任意）：
+
+```bash
+python tools/latency_pair.py --a "Realtek@MME" --b "AirPods@MME"     # 15 秒、両方で同時に録る。2〜3 秒おきに手を叩く
+```
+
+「B は A より N ms 遅い」と出る。`capture.latency_ms: N` を設定に書くと、`speech_start` / `speech_end` に話した時刻の見積もり
+`t_said_unix` が付く（`docs/INTEGRATION_JA.md` §5.6）。閲覧画面では A を開くと B が並び、手を叩いた所のずれが見える。
+
+**狭帯域だったときに試すこと**：
+
+1. Windows Update（Bluetooth のドライバや通話用の音声の扱いが更新されることがある）。
+2. アダプタのドライバを、メーカー（Intel・Realtek など）の新しいものにする。汎用のドライバでは広帯域（mSBC）を使えないことがある。
+3. 別のアダプタ（Bluetooth 5.x で広帯域音声に対応をうたうもの）。買い替えの判断は `devcheck` の結果で。
+4. 別の行（ホスト API）を試す。ただし帯域は Bluetooth の接続で決まるので、行を変えても中身は同じことが多い。
 
 ## 段ごとの報告
 

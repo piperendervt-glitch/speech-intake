@@ -3,6 +3,6 @@
 取り込み以外の段は生のマイクに依存しない。ここだけが sounddevice を import する。
 """
 
-from .mic import MicCapture, list_input_devices
+from .mic import MicCapture, list_input_devices, resolve_device
 
-__all__ = ["MicCapture", "list_input_devices"]
+__all__ = ["MicCapture", "list_input_devices", "resolve_device"]

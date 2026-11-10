@@ -1,5 +1,7 @@
 # REPORT 段11：turn-bench からの申し送りへの対応
 
+（Bluetooth ヘッドセットの入力と機器の診断は別の報告：`docs/REPORT_段11_BT.md`）
+
 申し送りの元：turn-bench `docs/HANDOFF_to_speech_intake_JA.md`（ブランチ claude/project-thread-e3vgat）の 4 件。
 既存のメッセージの意味は変えていない（足しただけ）。turn-bench の `intake_client.py` は知らない type を読み飛ばすので、そのまま繋がる。
 

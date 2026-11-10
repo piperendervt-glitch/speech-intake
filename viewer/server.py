@@ -54,6 +54,52 @@ def compute_peaks(wav: Path, cache: Path) -> tuple[np.ndarray, int, int]:
     return out, sr, frames
 
 
+SPEC_NFFT = 512
+SPEC_BINS = 128  # 0〜8 kHz（16 kHz のとき）を 128 段に（隣り合う 2 本を平均）
+SPEC_DB = (-110.0, -20.0)  # この範囲を 0〜255 に
+
+
+def compute_spec(wav: Path, t0: float, t1: float, cols: int) -> tuple[np.ndarray, int]:
+    """[t0, t1) を cols 列のスペクトログラムにする（列ごとに中心の 32 ms を窓に）。uint8、形は (cols, SPEC_BINS)。
+
+    見ている範囲だけ計算する（拡大・移動のたびに閲覧画面から頼まれる）。長い範囲は列ごとに読み飛ばす。
+    """
+    info = sf.info(str(wav))
+    sr, frames = info.samplerate, info.frames
+    cols = int(min(max(cols, 1), 4000))
+    t1 = max(t1, t0 + 1e-3)
+    centers = ((t0 + (np.arange(cols) + 0.5) * (t1 - t0) / cols) * sr).astype(np.int64)
+    half = SPEC_NFFT // 2
+    win = np.hanning(SPEC_NFFT)
+    norm = 4.0 / (np.sum(win) ** 2)
+    a, b = int(centers[0] - half), int(centers[-1] + half)
+    with sf.SoundFile(str(wav)) as f:
+        if b - a <= 8_000_000:
+            lo, hi = max(a, 0), min(b, frames)
+            f.seek(lo)
+            x = f.read(max(hi - lo, 0), dtype="float32", always_2d=False)
+            buf = np.zeros(b - a, dtype=np.float32)
+            buf[lo - a: lo - a + len(x)] = x
+            idx = (centers - half - a)[:, None] + np.arange(SPEC_NFFT)[None, :]
+            seg = buf[idx]
+        else:
+            seg = np.zeros((cols, SPEC_NFFT), dtype=np.float32)
+            for i, c in enumerate(centers):
+                s0 = int(c - half)
+                if s0 + SPEC_NFFT <= 0 or s0 >= frames:
+                    continue
+                f.seek(max(s0, 0))
+                x = f.read(SPEC_NFFT - max(0, -s0), dtype="float32", always_2d=False)
+                seg[i, max(0, -s0): max(0, -s0) + len(x)] = x
+    P = (np.abs(np.fft.rfft(seg.astype(np.float64) * win, axis=1)) ** 2) * norm
+    P = P[:, : SPEC_BINS * 2].reshape(cols, SPEC_BINS, 2).mean(axis=2)
+    db = 10 * np.log10(np.maximum(P, 1e-14))
+    lo_db, hi_db = SPEC_DB
+    out = np.clip((db - lo_db) / (hi_db - lo_db) * 255, 0, 255).astype(np.uint8)
+    out[(centers < 0) | (centers >= frames)] = 0
+    return out, sr
+
+
 def _read_jsonl(p: Path) -> list[dict[str, Any]]:
     if not p.exists():
         return []
@@ -97,7 +143,14 @@ def make_app(cfg: dict[str, Any], store: SessionStore) -> web.Application:
                 group = group or info.get("group")
                 runs.append({"run": r, "providers": info.get("providers"), "started_at": info.get("started_at"),
                              "ref": info.get("ref")})
-            out.append({"session": sid, "meta": store.read_meta(sid), "runs": runs, "group": group})
+            dc = store.dir(sid) / "devcheck.json"  # 段11：入力機器の診断
+            devcheck = None
+            if dc.exists():
+                try:
+                    devcheck = json.loads(dc.read_text(encoding="utf-8"))
+                except json.JSONDecodeError:
+                    pass
+            out.append({"session": sid, "meta": store.read_meta(sid), "runs": runs, "group": group, "devcheck": devcheck})
         return web.json_response(out)
 
     async def align_summary(req):
@@ -155,6 +208,24 @@ def make_app(cfg: dict[str, Any], store: SessionStore) -> web.Application:
             },
         )
 
+    async def spec(req):
+        sid = sid_of(req)
+        wav = store.audio_path(sid)
+        if not wav.exists():
+            raise web.HTTPNotFound(text="no audio")
+        try:
+            t0, t1 = float(req.query.get("t0", 0)), float(req.query.get("t1", 10))
+            cols = int(req.query.get("cols", 800))
+        except ValueError:
+            raise web.HTTPBadRequest(text="bad range") from None
+        try:
+            data, sr = await asyncio.to_thread(compute_spec, wav, t0, t1, cols)
+        except RuntimeError as e:
+            raise web.HTTPServiceUnavailable(text=str(e)) from e
+        return web.Response(body=data.tobytes(), content_type="application/octet-stream",
+                            headers={"X-Cols": str(data.shape[0]), "X-Bins": str(data.shape[1]), "X-Sample-Rate": str(sr),
+                                     "X-Db-Range": f"{SPEC_DB[0]},{SPEC_DB[1]}", "Cache-Control": "no-store"})
+
     async def audio(req):
         sid = sid_of(req)
         return web.FileResponse(store.audio_path(sid), headers={"Cache-Control": "no-store"})
@@ -175,6 +246,7 @@ def make_app(cfg: dict[str, Any], store: SessionStore) -> web.Application:
     app.router.add_get("/api/sessions", sessions)
     app.router.add_get("/api/sessions/{sid}/peaks", peaks)
     app.router.add_get("/api/sessions/{sid}/audio", audio)
+    app.router.add_get("/api/sessions/{sid}/spec", spec)
     app.router.add_get("/api/sessions/{sid}/runs/{run}", run)
     app.router.add_get("/api/align_summary", align_summary)
     app.router.add_static("/static", STATIC)

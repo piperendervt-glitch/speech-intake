@@ -5,7 +5,8 @@
   python -m intake replay   SESSION [-c config.yaml] [--run NAME] [--speed fast|realtime]
   python -m intake import   FILE [--label X] [--replay -c config.yaml]   外部の音声をセッションにする
   python -m intake sessions                                             セッション一覧
-  python -m intake devices                                              入力デバイス一覧
+  python -m intake devices  [--json]                                     入力機器の一覧（ホスト API・既定のレート・開けるか・BT）
+  python -m intake devcheck [--device 名前] [--seconds 8]               入力機器の診断（帯域・頭の欠け・雑音・途切れ。段11）
   python -m intake view     [-c config.yaml]                            閲覧画面（http://127.0.0.1:8765）
   python -m intake models   speaker|whisper|phones|all                  モデルを取得
   python -m intake align    SESSION [--run R] [--ref ref ref_g2p]       参照 run と音素を整列（trace/phones_align.jsonl）
@@ -76,6 +77,32 @@ def _hold(a):
         _WS.shutdown()
 
 
+def _pick_device(a, cfg):
+    """--device / capture.device（番号・名前の一部）を番号にする。複数当たったら候補を出して止まる（段11）。"""
+    from .capture import list_input_devices, resolve_device  # noqa: PLC0415
+
+    spec = getattr(a, "device", None)
+    if spec is None:
+        spec = cfg["capture"].get("device")
+    api = getattr(a, "hostapi", None) or cfg["capture"].get("hostapi")
+    if spec is None or (isinstance(spec, int) and not api):
+        return spec
+    try:
+        return resolve_device(spec, list_input_devices(probe_rate=None), hostapi=api)
+    except ValueError as e:
+        raise SystemExit(f"[intake] {e}") from None
+
+
+def _mic(a, cfg, store, sid, **kw):
+    from .capture import MicCapture  # noqa: PLC0415
+
+    c = cfg["capture"]
+    return MicCapture(store, sid, sample_rate=cfg["sample_rate"], device=_pick_device(a, cfg), block_ms=c["block_ms"],
+                      latency=c.get("latency"), device_rate=kw.pop("device_rate", c.get("device_rate")),
+                      stall_s=float(c.get("stall_s") or 2.0),
+                      extra_meta={"latency_ms": c.get("latency_ms") or 0, **kw.pop("extra_meta", {})}, **kw)
+
+
 def cmd_record(a, cfg, store):
     sid = a.session or new_session_id()
     prov = a.input or cfg["capture"].get("provider", "sounddevice")
@@ -90,11 +117,7 @@ def cmd_record(a, cfg, store):
     elif prov in ("sounddevice", "mic"):
         from .capture import MicCapture  # noqa: PLC0415
 
-        dev = a.device if a.device is not None else cfg["capture"].get("device")
-        if isinstance(dev, str) and dev.isdigit():
-            dev = int(dev)
-        cap = MicCapture(store, sid, sample_rate=cfg["sample_rate"], device=dev, block_ms=cfg["capture"]["block_ms"],
-                         latency=cfg["capture"].get("latency"))
+        cap = _mic(a, cfg, store, sid)
         source = "mic"
     else:
         raise SystemExit(f"capture.provider={prov!r} は未登録。候補: sounddevice / ja1_udp")
@@ -105,6 +128,8 @@ def cmd_record(a, cfg, store):
     print(f"[intake] 録音中… Ctrl+C で止める → {store.audio_path(sid)}", file=sys.stderr)
     _run(cfg, store, sid, a.run or cfg["run_name"], source, cap.chunks())
     signal.signal(signal.SIGINT, signal.default_int_handler)
+    if getattr(cap, "lost", None):
+        print(f"[intake] 機器が途中で消えたため止めた：{cap.lost}", file=sys.stderr)
     _hold(a)
 
 
@@ -142,8 +167,62 @@ def cmd_sessions(a, cfg, store):  # noqa: ARG001
 def cmd_devices(a, cfg, store):  # noqa: ARG001
     from .capture import list_input_devices  # noqa: PLC0415
 
-    for d in list_input_devices():
-        print(f"{d['index']}\t{d['name']}\t{d['default_samplerate']:.0f} Hz")
+    rows = list_input_devices(probe_rate=None if a.no_probe else cfg["sample_rate"])
+    if a.json:
+        print(json.dumps(rows, ensure_ascii=False, indent=1))
+        return
+    print(format_devices(rows, cfg["sample_rate"]))
+
+
+_OPEN_MARK = {"ok": "○", "native": "△", "ng": "×"}
+
+
+def format_devices(rows, sr=16000) -> str:
+    """devices の表。印：○ 16 kHz で開ける／△ 機器の既定のレートでなら開ける（取り込みで 16 kHz に直す）／× 開けない。
+    BT = 名前から Bluetooth のヘッドセットらしい行。Hands-Free（ハンズフリー）の行がマイク。"""
+    out = [f"番号\t開\tBT\tAPI\t既定 Hz\tch\t名前"]
+    for d in rows:
+        mark = _OPEN_MARK.get(d.get("open"), "-")
+        out.append(f"{d['index']}\t{mark}\t{'BT' if d.get('bt') else ''}\t{d['hostapi']}\t{d['default_samplerate']:.0f}\t{d['channels']}\t{d['name']}")
+    out.append("")
+    out.append(f"開：○ {sr} Hz で開ける / △ 既定のレートでなら開ける（16 kHz に直して保存）/ × 開けない / - 確かめていない")
+    if any(d.get("bt") for d in rows):
+        out.append("BT：名前から Bluetooth らしい行。マイクとして使えるのは Hands-Free（ハンズフリー）/ Headset の行。"
+                   "番号は抜き差しで変わるので capture.device には名前の一部（例 \"AirPods@MME\"）を書く")
+    out.append("次に：python -m intake devcheck --device \"名前の一部@API\" で帯域を確かめる")
+    return "\n".join(out)
+
+
+def cmd_devcheck(a, cfg, store):
+    from .devcheck import analyze_session, format_report, SENTENCES  # noqa: PLC0415
+
+    if a.analyze:
+        for sid in a.analyze:
+            rep = analyze_session(store, sid)
+            print(format_report(rep))
+        return
+    rate = a.rate or "native"
+    rate = None if rate == "auto" else rate
+    label = a.label or "devcheck"
+    sid = new_session_id(suffix=label)
+    cap = _mic(a, cfg, store, sid, device_rate=rate, extra_meta={"devcheck": True, "label": label})
+    cap.prepare()
+    cap.max_samples = int(a.seconds * cfg["sample_rate"])
+    signal.signal(signal.SIGINT, lambda *_: cap.stop())
+    dev = store.read_meta(sid)
+    print(f"[devcheck] 機器：{dev.get('device_name', dev.get('device'))}（{dev.get('hostapi', '?')}、既定 {dev.get('device_default_rate', '?')} Hz）",
+          file=sys.stderr)
+    print(f"[devcheck] {a.seconds:.0f} 秒録る。始まったら 1 秒ほど黙ってから、次の英文をはっきり読む（s・sh・th の音を見る）：\n", file=sys.stderr)
+    for s in SENTENCES:
+        print(f"    {s}", file=sys.stderr)
+    print("", file=sys.stderr)
+    for _ in cap.chunks():
+        pass
+    signal.signal(signal.SIGINT, signal.default_int_handler)
+    rep = analyze_session(store, sid)
+    print(format_report(rep))
+    print(f"[devcheck] 閲覧画面（python -m intake view）でセッション {sid} を選び、「スペクトログラム」で 4 kHz より上を目で確かめる",
+          file=sys.stderr)
 
 
 def cmd_view(a, cfg, store):
@@ -189,7 +268,8 @@ def main(argv=None):
     sub = ap.add_subparsers(dest="cmd", required=True)
 
     r = sub.add_parser("record", help="マイクから録音")
-    r.add_argument("--device")
+    r.add_argument("--device", help="番号か名前の一部（\"AirPods@MME\" のように @ でホスト API も）")
+    r.add_argument("--hostapi", help="名前で選ぶときのホスト API（MME / WASAPI など）")
     r.add_argument("--input", choices=["mic", "ja1"], help="入口（省略時は設定の capture.provider）。ja1 = JA1 行の UDP（AirPods など）")
     r.add_argument("--seconds", type=float)
     r.add_argument("--session")
@@ -214,7 +294,18 @@ def main(argv=None):
     i.set_defaults(fn=cmd_import)
 
     sub.add_parser("sessions", help="セッション一覧").set_defaults(fn=cmd_sessions)
-    sub.add_parser("devices", help="入力デバイス一覧").set_defaults(fn=cmd_devices)
+    dv = sub.add_parser("devices", help="入力デバイス一覧（ホスト API・既定のレート・開けるか）")
+    dv.add_argument("--json", action="store_true")
+    dv.add_argument("--no-probe", action="store_true", help="開けるかを確かめない")
+    dv.set_defaults(fn=cmd_devices)
+    dc = sub.add_parser("devcheck", help="入力機器の診断：数秒録って帯域・頭の欠け・雑音・途切れを見る（段11）")
+    dc.add_argument("--device", help="番号か名前の一部（\"AirPods@MME\"）")
+    dc.add_argument("--hostapi")
+    dc.add_argument("--seconds", type=float, default=8.0)
+    dc.add_argument("--rate", help="機器を開くレート：native（既定）/ auto（16 kHz で開けたらそれ）/ 数")
+    dc.add_argument("--label", help="セッション名の後ろに付ける（英数字と -。例 airpods）")
+    dc.add_argument("--analyze", nargs="+", metavar="SESSION", help="録らずに、既にあるセッションを診断する")
+    dc.set_defaults(fn=cmd_devcheck)
     m = sub.add_parser("models", help="モデルを取得する（models/ に置く）")
     m.add_argument("what", choices=["speaker", "whisper", "phones", "all"])
     m.add_argument("--whisper", default="large-v3")

@@ -105,6 +105,8 @@ class Pipeline:
         self._jobs = 0  # STT のスレッドに頼んで、まだ終わっていない仕事の数
         self._jobs_lock = threading.Lock()
         self._inbox: list[dict[str, Any]] = []  # 購読側から届いた set（次のチャンクで反映する）
+        self._real_input = False
+        self.input_latency = float((cfg.get("capture") or {}).get("latency_ms") or 0) / 1000  # 段11
 
     def info(self, source: str) -> dict[str, Any]:
         public = {k: v for k, v in self.cfg.items() if not k.startswith("_")}
@@ -132,6 +134,12 @@ class Pipeline:
         """speech_start / speech_end / speech_dropped を配る。trace/events.jsonl にも同じものを残す。"""
         now = time.time() if now is None else now
         msg = {**ev, "t_unix": round(now, 4)}
+        if self._real_input and self._clock0 is not None and ev.get("type") in ("speech_start", "speech_end"):
+            # 段11：話した時刻の壁時計の見積もり。入力の遅れ（Bluetooth など、capture.latency_ms）を引く。
+            # t_unix（配った時刻）はそのまま。t_unix - t_said_unix が「話してから届くまで」全体の遅れ
+            t = ev.get("t") if ev["type"] == "speech_start" else ev.get("t1")
+            if t is not None:
+                msg["t_said_unix"] = round(self._clock0 + t - self.input_latency, 4)
         row = dict(msg)
         if self.live and self._clock0 is not None:
             row["t_emit"] = round(now - self._clock0, 3)  # 通知を出した時刻を音声の時計（セッション秒）で
@@ -340,6 +348,7 @@ class Pipeline:
     def run(self, chunks: Iterable[AudioChunk], source: str) -> dict[str, Any]:
         t_start = time.monotonic()
         self.live = source in ("mic", "ja1_udp") or source.endswith(":realtime")
+        self._real_input = source in ("mic", "ja1_udp")  # t_said_unix は本物の入力のときだけ（流し直しには話した時刻が無い）
         self._out("start", self.info(source))
         try:
             for c in chunks:

@@ -345,3 +345,25 @@ speech_start(seg) → speech_end(seg) → utterance(seg) を 1 つ以上  また
   `time.monotonic`）。送り手の時計 `t` はセッション秒 `t - ja1_t0`（無音で埋めた分を含めてそのまま対応する）。
 - AirPods の HFP は 16 kHz（mSBC）か 8 kHz を 16 kHz に直したもの（CVSD）。電話の帯域なので、マイクより STT の誤りが増える見込み（未確認）。
 
+### 5.6 Bluetooth ヘッドセットのマイクを入力にするとき（段11）
+
+Windows 標準の Bluetooth で AirPods などをつなぎ、Hands-Free の行を `capture.device` に指定したとき
+（手順は README「Bluetooth ヘッドセットを使う」）。メッセージの形は変わらない。気をつけること：
+
+- **遅れが乗る**。Bluetooth の入力は PC のマイクより遅れて届く（量はアダプタと機器次第。`tools/latency_pair.py` で測る）。
+  `speech_start` の `t_unix`（配った時刻）はその分だけ「話し始め」より遅い。測った値を `capture.latency_ms` に書くと、
+  マイク入力（`record`。JA1 も）のときだけ `speech_start` / `speech_end` に **`t_said_unix`** が付く：
+  話した時刻の壁時計の見積もり（`speech_start` は `t`、`speech_end` は `t1` の所。音声が届いた時刻から逆算し、`latency_ms` を引いたもの）。
+  `t_unix - t_said_unix` が「話してから通知が届くまで」全体の遅れ。`t_unix` そのものは書き換えない（今までどおり配った時刻）。
+  `latency_ms` を書かない（0）ときも `t_said_unix` は付く（入力の遅れを 0 とみなした値）。流し直し（replay）では付かない。
+- **頭が欠ける**。マイクを開いた直後、Bluetooth の接続が HFP に切り替わる間（数百 ms〜1 秒ほど）は無音になる。
+  録り始めてすぐ話した頭は失われる（`devcheck` の「頭の欠け」で長さが分かる）。`record` を起動してから話し始めるまで少し待つ。
+  ずっと開いたままなら、最初の 1 回だけ。
+- **モノラルで電話の帯域**。HFP のマイクは 1 チャンネルで、16 kHz（広帯域）か 8 kHz（狭帯域）。狭帯域だと 4 kHz より上が無く、
+  「s」「sh」などがこもるので STT の誤りが増える見込み（未測定。閲覧画面で PC のマイクと並べて単語の `p` を見る）。
+  機器が 16 kHz 以外で届くときは speech-intake が 16 kHz に直して保存する（元のレートは `session.json` の `device_rate`）。
+- **途中で切れる**。電池切れ・接続切れで音が `capture.stall_s`（既定 2 秒）届かなければ、それまでを保存して終わる
+  （`session.json` の `ended_by: "device_lost"`）。購読側には通常の終わりと同じく接続が閉じる（`end` は届く）。
+- マイクを開いている間は、同じヘッドセットの出力も HFP（電話の音質）になる。AI の声を高音質で返したいときの出力の扱いは
+  speech-intake の範囲外。
+

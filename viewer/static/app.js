@@ -4,7 +4,7 @@
 const $ = (id) => document.getElementById(id);
 const css = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
 const SPK_COLORS = ["#e8590c", "#1c7ed6", "#2f9e44", "#ae3ec9", "#f59f00", "#0ca678", "#d6336c", "#5c7cfa"];
-const LANES = { wave: 110, ev: 22, lag: 42, spk: 28, text: 46, words: 38, phones: 34, ref: 34 };
+const LANES = { wave: 110, spec: 128, ev: 22, lag: 42, spk: 28, text: 46, words: 38, phones: 34, ref: 34 };
 const OP_LABEL = { match: "一致", sub: "置換", del: "脱落", ins: "挿入" };
 
 const S = {
@@ -12,6 +12,12 @@ const S = {
   sid: null,
   meta: null,
   peaks: null, // {data: Int16Array(min,max,...), pps, duration}
+  sidB: null, // 比較のセッション（段11。null = A と同じセッションの別の run）
+  metaB: null,
+  peaksB: null,
+  offB: 0, // B の時刻 = A の時刻 + offB（秒）。壁時計で合わせるときは t0_unix(A) - t0_unix(B)
+  spec: [null, null], // 見えている範囲のスペクトログラム {key, sid, t0, t1, img}
+  specWant: [null, null],
   runs: [null, null], // {name, info, utterances, trace}
   view: { t0: 0, dur: 10 },
   play: null, // {t0, t1|null}
@@ -53,17 +59,17 @@ async function loadSessions(keep = true) {
 }
 
 function fillRunSelects() {
-  const s = S.sessions.find((x) => x.session === S.sid);
-  const runs = s ? s.runs : [];
   const q = new URLSearchParams(location.search);
   for (const [id, allowNone, idx] of [["runA", false, 0], ["runB", true, 1]]) {
+    const s = S.sessions.find((x) => x.session === sidOf(idx));
+    const runs = s ? s.runs : [];
     const sel = $(id);
     const prev = (S.runs[idx] && S.runs[idx].name) || q.get(id) || sel.value;
     sel.innerHTML = "";
     if (allowNone || !runs.length) {
       const o = document.createElement("option");
       o.value = "";
-      o.textContent = allowNone ? "（比較しない）" : "（結果なし：波形のみ）";
+      o.textContent = allowNone ? (S.sidB ? "（結果なし：波形のみ）" : "（比較しない）") : "（結果なし：波形のみ）";
       sel.appendChild(o);
     }
     for (const r of runs) {
@@ -79,20 +85,29 @@ function fillRunSelects() {
   }
 }
 
-async function loadPeaks() {
-  const r = await fetch(`/api/sessions/${S.sid}/peaks`, { cache: "no-store" });
-  if (!r.ok) { S.peaks = null; return; }
+async function fetchPeaks(sid) {
+  const r = await fetch(`/api/sessions/${sid}/peaks`, { cache: "no-store" });
+  if (!r.ok) return null;
   const buf = await r.arrayBuffer();
   const pps = +r.headers.get("X-Peaks-Per-Sec");
   const frames = +r.headers.get("X-Frames");
   const sr = +r.headers.get("X-Sample-Rate");
-  S.peaks = { data: new Int16Array(buf), pps, duration: frames / sr };
+  return { data: new Int16Array(buf), pps, duration: frames / sr };
 }
+async function loadPeaks() {
+  S.peaks = await fetchPeaks(S.sid);
+  S.peaksB = S.sidB ? await fetchPeaks(S.sidB) : null;
+}
+const sidOf = (idx) => (idx === 1 && S.sidB ? S.sidB : S.sid);
+const peaksOf = (idx) => (idx === 1 && S.sidB ? S.peaksB : S.peaks);
+const offOf = (idx) => (idx === 1 && S.sidB ? S.offB : 0);
+const audioOf = (idx) => $(idx === 1 && S.sidB ? "audioB" : "audio");
+const sessOf = (sid) => S.sessions.find((x) => x.session === sid) || {};
 
 async function loadRun(idx) {
   const name = $(idx === 0 ? "runA" : "runB").value;
   if (!name) { S.runs[idx] = null; return; }
-  const d = await getJSON(`/api/sessions/${S.sid}/runs/${encodeURIComponent(name)}`);
+  const d = await getJSON(`/api/sessions/${sidOf(idx)}/runs/${encodeURIComponent(name)}`);
   S.runs[idx] = prepRun({ name, ...d });
 }
 
@@ -172,6 +187,7 @@ async function openSession(sid, resetView = true) {
   const audio = $("audio");
   stop();
   audio.src = `/api/sessions/${sid}/audio?ts=${Date.now()}`;
+  fillSessionB();
   fillRunSelects();
   await Promise.all([loadPeaks(), loadRun(0), loadRun(1)]);
   indexSpeakers();
@@ -180,6 +196,37 @@ async function openSession(sid, resetView = true) {
   buildPanels();
   setStatus(statusText());
   schedulePoll();
+}
+
+// 比較のセッション（B）。latency_pair で録った組は相手を初めから選ぶ。時刻は壁時計（session.json の t0_unix）で合わせる
+function fillSessionB(want) {
+  const sel = $("sessionB");
+  const q = new URLSearchParams(location.search);
+  const pair = (S.meta && S.meta.pair && S.meta.pair.with) || null;
+  const prev = want !== undefined ? want : S.sidB || q.get("sessionB") || pair || "";
+  sel.innerHTML = '<option value="">（同じセッションの別の run）</option>' +
+    S.sessions.filter((x) => x.session !== S.sid).map((x) => `<option value="${esc(x.session)}">${esc(x.session)}  ${esc((x.meta || {}).label || (x.meta || {}).device_name || (x.meta || {}).source || "")}</option>`).join("");
+  sel.value = [...sel.options].some((o) => o.value === prev) ? prev : "";
+  setSessionB(sel.value || null);
+}
+
+function wallOffset() {
+  const a = (S.meta || {}).t0_unix, b = (S.metaB || {}).t0_unix;
+  return a != null && b != null ? a - b : null;
+}
+
+function setSessionB(sid) {
+  S.sidB = sid;
+  S.metaB = sid ? sessOf(sid).meta || {} : null;
+  const w = wallOffset();
+  S.offB = sid && w != null ? w : 0;
+  $("offB").value = Math.round(S.offB * 1000);
+  $("offB").disabled = !sid;
+  $("offWall").disabled = !sid || w == null;
+  const aB = $("audioB");
+  if (sid) aB.src = `/api/sessions/${sid}/audio?ts=${Date.now()}`;
+  else aB.removeAttribute("src");
+  S.spec = [null, null];
 }
 
 function statusText() {
@@ -212,6 +259,7 @@ function schedulePoll() {
 function updateUrl() {
   const q = new URLSearchParams();
   q.set("session", S.sid);
+  if (S.sidB) q.set("sessionB", S.sidB);
   if ($("group").value) q.set("group", $("group").value);
   if ($("runA").value) q.set("runA", $("runA").value);
   if ($("runB").value) q.set("runB", $("runB").value);
@@ -220,7 +268,9 @@ function updateUrl() {
 
 // ---------- view ----------
 function duration() {
-  return S.peaks ? Math.max(S.peaks.duration, 0.1) : 10;
+  let d = S.peaks ? S.peaks.duration : 10;
+  if (S.sidB && S.peaksB) d = Math.max(d, S.peaksB.duration - S.offB);
+  return Math.max(d, 0.1);
 }
 function fitView() {
   S.view.t0 = 0;
@@ -253,6 +303,7 @@ function fmtTime(t) {
 // ---------- panels ----------
 function panelLayout() {
   const L = [{ key: "wave", h: LANES.wave }];
+  if ($("tSpec").checked) L.push({ key: "spec", h: LANES.spec });
   if ($("tEv").checked && S.runs.some((r) => r && r.segs)) {
     L.push({ key: "ev", h: LANES.ev });
     if ($("tLag").checked) L.push({ key: "lag", h: LANES.lag });
@@ -272,20 +323,21 @@ function panelLayout() {
 function buildPanels() {
   const root = $("panels");
   root.innerHTML = "";
-  const list = S.runs[1] ? [0, 1] : [0];
+  const list = S.runs[1] || S.sidB ? [0, 1] : [0];
   for (const idx of list) {
     const r = S.runs[idx];
     const div = document.createElement("div");
     div.className = "panel";
     const h = document.createElement("h3");
-    const label = idx === 0 ? "A" : "B";
+    const label = (idx === 0 ? "A" : "B") + (S.sidB ? `（${esc(sidOf(idx))}）` : "");
+    const dc = devcheckText(idx);
     if (r) {
       const p = r.info.providers || {};
       const ph = r.isRef ? ` / 参照（${esc(r.info.ref.source)}: ${esc(r.info.ref.by)}）。音素に時刻は無く、発話の中に均等に並べて表示`
         : p.phones && p.phones !== "none" ? ` / phones=${esc(p.phones)}${r.refRun ? ` / 差分の参照=${esc(r.refRun)}` : ""}` : "";
-      h.innerHTML = `${label}: ${esc(r.name)}<span class="muted">vad=${esc(p.vad)} / stt=${esc(p.stt)} / speaker=${esc(p.speaker)}${ph} / 発話 ${r.utterances.length} 件 / ${esc(r.info.source || "")}${r.info.group ? " / 群=" + esc(r.info.group) : ""}</span>`;
+      h.innerHTML = `${label}: ${esc(r.name)}<span class="muted">vad=${esc(p.vad)} / stt=${esc(p.stt)} / speaker=${esc(p.speaker)}${ph} / 発話 ${r.utterances.length} 件 / ${esc(r.info.source || "")}${r.info.group ? " / 群=" + esc(r.info.group) : ""}${dc}</span>`;
     } else {
-      h.innerHTML = `${label}: 波形のみ<span class="muted">この録音はまだ流し直していない（python -m intake replay ${esc(S.sid)}）</span>`;
+      h.innerHTML = `${label}: 波形のみ<span class="muted">${dc ? dc.slice(3) : `この録音はまだ流し直していない（python -m intake replay ${esc(sidOf(idx))}）`}</span>`;
     }
     const cv = document.createElement("canvas");
     cv.dataset.idx = idx;
@@ -294,9 +346,77 @@ function buildPanels() {
     attachPointer(cv);
   }
   buildTables();
+  buildDevcheck();
   buildAligns();
   buildSummary();
   drawAll();
+}
+
+// 入力機器の情報と devcheck の判定（段11）をパネルの見出しに
+function devcheckText(idx) {
+  const s = sessOf(sidOf(idx));
+  const m = s.meta || {};
+  const parts = [];
+  if (m.device_name) parts.push(`${m.device_name}（${m.hostapi || "?"}、${m.device_rate || m.device_default_rate || "?"} Hz${m.resampled ? "→16 kHz" : ""}）`);
+  if (m.lost) parts.push(`途中で止まった：${m.lost}`);
+  const d = s.devcheck;
+  if (d) parts.push(`devcheck：${d.verdict_text}${d.band && d.band.upper_hz != null ? `（上端 ${d.band.upper_hz} Hz）` : ""}`);
+  return parts.length ? " / " + parts.map(esc).join(" / ") : "";
+}
+
+// devcheck の数字と、声・雑音の平均スペクトル（段11）。判定は目安、決めるのはスペクトログラムを見た人
+function buildDevcheck() {
+  const root = $("devcheck");
+  root.innerHTML = "";
+  const ids = [...new Set([S.sid, S.sidB].filter(Boolean))];
+  for (const sid of ids) {
+    const d = sessOf(sid).devcheck;
+    if (!d) continue;
+    const el = document.createElement("details");
+    el.open = true;
+    const b = d.band || {};
+    const dev = d.device || {};
+    el.innerHTML = `<summary>devcheck ${esc(sid)}：<strong>${esc(d.verdict_text)}</strong>（目安）</summary>
+      <table><tbody>
+      <tr><th>機器</th><td>${esc(dev.device_name || dev.device || "?")}（${esc(dev.hostapi || "?")}）申告 ${esc(dev.device_default_rate ?? "?")} Hz / 開いた ${esc(dev.device_rate ?? "?")} Hz${dev.resampled ? "（16 kHz に直して保存）" : ""}</td></tr>
+      <tr><th>理由</th><td>${(d.reasons || []).map(esc).join("<br>")}</td></tr>
+      <tr><th>帯域</th><td class="num">上端 ${esc(b.upper_hz ?? "?")} Hz / 4 kHz 上の比 ${esc(b.hf_ratio_db ?? "?")} dB / 4 kHz の段差 ${esc(b.cliff_db ?? "?")} dB / s などの枠 ${esc(b.sibilant_frames ?? "?")} / 声 ${esc(b.active_s ?? "?")} s</td></tr>
+      <tr><th>頭の欠け</th><td class="num">${esc(d.head_silence_ms ?? "?")} ms</td></tr>
+      <tr><th>雑音</th><td class="num">${esc(d.noise_dbfs ?? "?")} dBFS（声 ${esc(d.speech_dbfs ?? "?")} dBFS）</td></tr>
+      <tr><th>途切れ</th><td class="num">${esc(d.dropout_count ?? 0)} 回 / 計 ${esc(d.dropout_total_ms ?? 0)} ms ${(d.dropouts || []).slice(0, 10).map((x) => `${x.t}s:${x.ms}ms`).join(" ")}</td></tr>
+      </tbody></table><p class="muted">${esc(d.note || "")}</p>`;
+    if (d.spectrum_db) {
+      const cv = document.createElement("canvas");
+      cv.className = "spectrum";
+      el.appendChild(cv);
+      requestAnimationFrame(() => drawSpectrum(cv, d.spectrum_db));
+    }
+    root.appendChild(el);
+  }
+}
+
+function drawSpectrum(cv, sp) {
+  const { ctx, w, h } = sizeCanvas(cv, 140);
+  ctx.clearRect(0, 0, w, h);
+  const fmax = 8000, lo = -120, hi = -20, padL = 34, padB = 16;
+  const X = (f) => padL + (f / fmax) * (w - padL - 4);
+  const Y = (db) => 4 + (1 - (Math.min(Math.max(db, lo), hi) - lo) / (hi - lo)) * (h - padB - 8);
+  ctx.font = "10px ui-monospace, Consolas, monospace";
+  ctx.fillStyle = css("--muted");
+  ctx.strokeStyle = css("--line");
+  for (let f = 0; f <= fmax; f += 1000) {
+    ctx.beginPath(); ctx.moveTo(X(f) + 0.5, 4); ctx.lineTo(X(f) + 0.5, h - padB); ctx.stroke();
+    ctx.fillText(`${f / 1000}k`, X(f) - 6, h - 4);
+  }
+  for (let db = lo; db <= hi; db += 20) ctx.fillText(String(db), 0, Y(db) + 3);
+  ctx.strokeStyle = css("--play"); ctx.setLineDash([4, 3]);
+  ctx.beginPath(); ctx.moveTo(X(4000) + 0.5, 4); ctx.lineTo(X(4000) + 0.5, h - padB); ctx.stroke(); ctx.setLineDash([]);
+  for (const [key, col, label] of [["noise", css("--muted"), "雑音"], ["speech", css("--wave"), "声"]]) {
+    ctx.strokeStyle = col; ctx.lineWidth = 1.5; ctx.beginPath();
+    sp.hz.forEach((f, i) => (i ? ctx.lineTo(X(f), Y(sp[key][i])) : ctx.moveTo(X(f), Y(sp[key][i]))));
+    ctx.stroke(); ctx.lineWidth = 1;
+    ctx.fillStyle = col; ctx.fillText(label, w - 40, key === "speech" ? 14 : 26);
+  }
 }
 
 function esc(s) {
@@ -321,7 +441,7 @@ function buildTables() {
       const col = u.speaker ? S.spkIndex[u.speaker] : null;
       tr.innerHTML = `<td class="num">${esc(u.id)}</td><td class="num">${u.t0.toFixed(2)}</td><td class="num">${u.t1.toFixed(2)}</td>` +
         `<td>${col ? `<span class="swatch" style="background:${col}"></span>` : ""}${esc(u.speaker || "")}${u.speaker_conf != null ? ` <span class="muted">${u.speaker_conf.toFixed(2)}</span>` : ""}</td><td>${esc(u.text)}</td>`;
-      tr.onclick = () => { focusRange(u.t0, u.t1); playRange(u.t0, u.t1); };
+      tr.onclick = () => { focusRange(u.t0 - offOf(idx), u.t1 - offOf(idx)); playRange(u.t0, u.t1, idx); };
       tr.title = JSON.stringify(u);
       tb.appendChild(tr);
     }
@@ -349,7 +469,7 @@ function lagTable(r, idx) {
       `<td class="num">${g.start ? ms(g.start.t, g.startAt) : ""}</td><td class="num">${g.end && !g.end.dropped ? ms(g.end.t1, g.endAt) : ""}</td>` +
       `<td class="num">${g.sttMs != null ? Math.round(g.sttMs) : ""}</td><td>${res}</td>`;
     const t0 = g.start ? g.start.t : 0, t1 = g.end ? g.end.t1 : t0 + 1;
-    tr.onclick = () => { focusRange(t0, t1); playRange(t0, t1); };
+    tr.onclick = () => { focusRange(t0 - offOf(idx), t1 - offOf(idx)); playRange(t0, t1, idx); };
     tb.appendChild(tr);
   }
   t.appendChild(tb);
@@ -382,7 +502,7 @@ function drawAll() {
   drawRuler();
   const layout = panelLayout();
   for (const cv of document.querySelectorAll("#panels canvas")) drawPanel(cv, layout);
-  $("clock").textContent = `${fmtTime(S.view.t0)} – ${fmtTime(S.view.t0 + S.view.dur)}` + (S.play ? `  ▶ ${fmtTime($("audio").currentTime)}` : "");
+  $("clock").textContent = `${fmtTime(S.view.t0)} – ${fmtTime(S.view.t0 + S.view.dur)}` + (S.play ? `  ▶ ${fmtTime(playT())}` : "");
 }
 
 function niceStep(dur, w) {
@@ -410,7 +530,7 @@ function drawRuler() {
 
 function drawPlayhead(ctx, w, h) {
   if (!S.play) return;
-  const x = tToX($("audio").currentTime, w);
+  const x = tToX(playT(), w);
   if (x < 0 || x > w) return;
   ctx.strokeStyle = css("--play");
   ctx.lineWidth = 1.5;
@@ -418,11 +538,11 @@ function drawPlayhead(ctx, w, h) {
   ctx.lineWidth = 1;
 }
 
-function drawWave(ctx, w, y, h) {
+function drawWave(ctx, w, y, h, peaks) {
   ctx.strokeStyle = css("--line");
   ctx.beginPath(); ctx.moveTo(0, y + h / 2 + 0.5); ctx.lineTo(w, y + h / 2 + 0.5); ctx.stroke();
-  if (!S.peaks) return;
-  const { data, pps } = S.peaks;
+  if (!peaks) return;
+  const { data, pps } = peaks;
   const n = data.length / 2;
   const mid = y + h / 2;
   const amp = (h / 2 - 2) / 32768;
@@ -500,6 +620,13 @@ function clipText(ctx, text, maxW) {
 
 function drawPanel(cv, layout) {
   const idx = +cv.dataset.idx;
+  const off = offOf(idx);
+  if (!off) return drawPanelAt(cv, layout, idx);
+  S.view.t0 += off; // B の時刻で描く（A の時刻 = B の時刻 - offB）
+  try { drawPanelAt(cv, layout, idx); } finally { S.view.t0 -= off; }
+}
+
+function drawPanelAt(cv, layout, idx) {
   const r = S.runs[idx];
   const { ctx, w, h } = sizeCanvas(cv, layout.height);
   ctx.clearRect(0, 0, w, h);
@@ -509,7 +636,7 @@ function drawPanel(cv, layout) {
     ctx.strokeStyle = css("--line");
     if (L.y > 0) { ctx.beginPath(); ctx.moveTo(0, L.y + 0.5); ctx.lineTo(w, L.y + 0.5); ctx.stroke(); }
     if (L.key === "wave") {
-      drawWave(ctx, w, L.y, L.h);
+      drawWave(ctx, w, L.y, L.h, peaksOf(idx));
       if (r && $("tVad").checked) {
         for (const s of (r.trace.vad || [])) {
           if (!visible(s.t0, s.t1)) continue;
@@ -523,6 +650,7 @@ function drawPanel(cv, layout) {
         drawVadProb(ctx, w, L, r);
       }
     }
+    if (L.key === "spec") drawSpec(ctx, w, L, idx);
     if (!r) continue;
     if (L.key === "spk") {
       ctx.font = "11px system-ui, sans-serif";
@@ -595,7 +723,8 @@ function drawPanel(cv, layout) {
     if (L.key === "ref") drawRefLane(ctx, w, L, r, hits);
   }
   if (S.play && S.play.t1 != null) {
-    const x0 = tToX(S.play.t0, w), x1 = tToX(S.play.t1, w);
+    const po = offOf(S.play.idx) - offOf(idx); // 再生中の区間を、このパネルの時刻に直す
+    const x0 = tToX(S.play.t0 - po, w), x1 = tToX(S.play.t1 - po, w);
     ctx.strokeStyle = css("--play");
     ctx.setLineDash([4, 3]);
     ctx.strokeRect(x0 + 0.5, 0.5, Math.max(1, x1 - x0 - 1), h - 1);
@@ -603,6 +732,69 @@ function drawPanel(cv, layout) {
   }
   drawPlayhead(ctx, w, h);
   cv._hits = hits;
+}
+
+// スペクトログラム（段11）：0〜8 kHz、見えている範囲だけサーバで計算する。4 kHz に目安の点線
+const SPEC_STOPS = [[0, 0, 0], [40, 10, 90], [150, 30, 120], [235, 90, 40], [255, 220, 120], [255, 255, 235]];
+const SPEC_LUT = (() => {
+  const lut = new Uint8ClampedArray(256 * 3);
+  for (let i = 0; i < 256; i++) {
+    const p = (i / 255) * (SPEC_STOPS.length - 1), k = Math.min(Math.floor(p), SPEC_STOPS.length - 2), f = p - k;
+    for (let c = 0; c < 3; c++) lut[i * 3 + c] = SPEC_STOPS[k][c] * (1 - f) + SPEC_STOPS[k + 1][c] * f;
+  }
+  return lut;
+})();
+
+function drawSpec(ctx, w, L, idx) {
+  const sid = sidOf(idx);
+  const t0 = S.view.t0, t1 = S.view.t0 + S.view.dur;
+  const cols = Math.min(4000, Math.max(50, Math.round(w)));
+  const key = `${sid}|${t0.toFixed(4)}|${t1.toFixed(4)}|${cols}`;
+  const c = S.spec[idx];
+  ctx.fillStyle = "#000";
+  ctx.fillRect(0, L.y, w, L.h);
+  if (c && c.sid === sid) { // 前の範囲の絵を、時刻を合わせて伸ばして描く（新しい絵が届くまで）
+    const x0 = tToX(c.t0, w), x1 = tToX(c.t1, w);
+    ctx.imageSmoothingEnabled = false;
+    ctx.drawImage(c.img, x0, L.y + 1, x1 - x0, L.h - 2);
+  }
+  if (!c || c.key !== key) requestSpec(idx, key, sid, t0, t1, cols);
+  const nyq = 8000;
+  const yOf = (f) => L.y + 1 + (1 - f / nyq) * (L.h - 2);
+  ctx.strokeStyle = "rgba(255,255,255,.75)";
+  ctx.setLineDash([5, 4]);
+  ctx.beginPath(); ctx.moveTo(0, Math.round(yOf(4000)) + 0.5); ctx.lineTo(w, Math.round(yOf(4000)) + 0.5); ctx.stroke();
+  ctx.setLineDash([]);
+  ctx.font = "10px ui-monospace, Consolas, monospace";
+  ctx.fillStyle = "rgba(255,255,255,.85)";
+  ctx.fillText("8k", 3, L.y + 11);
+  ctx.fillText("4k", 3, yOf(4000) - 3);
+  ctx.fillText("0", 3, L.y + L.h - 4);
+}
+
+function requestSpec(idx, key, sid, t0, t1, cols) {
+  if (S.specWant[idx] === key) return;
+  S.specWant[idx] = key;
+  clearTimeout(requestSpec["timer" + idx]);
+  requestSpec["timer" + idx] = setTimeout(async () => {
+    try {
+      const r = await fetch(`/api/sessions/${sid}/spec?t0=${t0}&t1=${t1}&cols=${cols}`, { cache: "no-store" });
+      if (!r.ok || S.specWant[idx] !== key) return;
+      const data = new Uint8Array(await r.arrayBuffer());
+      const nc = +r.headers.get("X-Cols"), nb = +r.headers.get("X-Bins");
+      const img = document.createElement("canvas");
+      img.width = nc; img.height = nb;
+      const ictx = img.getContext("2d");
+      const id = ictx.createImageData(nc, nb);
+      for (let x = 0; x < nc; x++) for (let b = 0; b < nb; b++) {
+        const v = data[x * nb + b], o = ((nb - 1 - b) * nc + x) * 4;
+        id.data[o] = SPEC_LUT[v * 3]; id.data[o + 1] = SPEC_LUT[v * 3 + 1]; id.data[o + 2] = SPEC_LUT[v * 3 + 2]; id.data[o + 3] = 255;
+      }
+      ictx.putImageData(id, 0, 0);
+      S.spec[idx] = { key, sid, t0, t1, img };
+      drawAll();
+    } catch (e) { /* 録音中でまだ読めないなど。次の描画で頼み直す */ S.specWant[idx] = null; }
+  }, 120);
 }
 
 // 通知の印：区間ごとに start（緑）・end（橙）・utterance（青）・捨てた（灰）。波形の段には start / end の位置に細い縦線
@@ -866,8 +1058,9 @@ function attachPointer(cv) {
     drag = null;
     if (!d || d.moved) return;
     const hh = hitAt(cv, e.offsetX, e.offsetY);
-    if (hh) playRange(hh.t0, hh.t1);
-    else playRange(xToT(e.offsetX, cv.clientWidth), null);
+    const idx = +cv.dataset.idx;
+    if (hh) playRange(hh.t0, hh.t1, idx);
+    else playRange(xToT(e.offsetX, cv.clientWidth) + offOf(idx), null, idx);
   });
   cv.addEventListener("wheel", (e) => {
     e.preventDefault();
@@ -883,24 +1076,28 @@ function attachPointer(cv) {
 }
 
 // ---------- audio ----------
-function playRange(t0, t1) {
-  const a = $("audio");
-  S.play = { t0: Math.max(0, t0), t1 };
+function playRange(t0, t1, idx = 0) {
+  if (S.play) stop();
+  const a = audioOf(idx);
+  S.play = { t0: Math.max(0, t0), t1, idx: idx === 1 && S.sidB ? 1 : 0 };
   a.currentTime = S.play.t0;
   a.play().catch((err) => setStatus("再生できない: " + err.message));
   $("play").textContent = "■ 停止";
   tick();
 }
 function stop() {
-  const a = $("audio");
-  if (!a.paused) a.pause();
+  for (const id of ["audio", "audioB"]) { const a = $(id); if (!a.paused) a.pause(); }
   S.play = null;
   $("play").textContent = "▶ 再生";
   drawAll();
 }
+// 再生位置を A の時刻で（B のセッションを再生しているときは offB を引く）
+function playT() {
+  return S.play ? audioOf(S.play.idx).currentTime - offOf(S.play.idx) : 0;
+}
 function tick() {
   if (!S.play) return;
-  const a = $("audio");
+  const a = audioOf(S.play.idx);
   if (S.play.t1 != null && a.currentTime >= S.play.t1) { stop(); return; }
   if (a.ended || (a.paused && a.readyState >= 2 && a.currentTime > S.play.t0 + 0.05)) { stop(); return; }
   drawAll();
@@ -918,6 +1115,16 @@ $("refKind").onchange = () => { S.runs.forEach(prepRun); S.summaryKey = null; bu
 $("phMode").onchange = () => { buildAligns(); drawAll(); };
 $("tPhones").onchange = () => { buildPanels(); };
 $("runA").onchange = async () => { await loadRun(0); indexSpeakers(); updateUrl(); buildPanels(); setStatus(statusText()); };
+$("sessionB").onchange = async () => {
+  setSessionB($("sessionB").value || null);
+  S.runs[1] = null;
+  fillRunSelects();
+  await Promise.all([loadPeaks(), loadRun(1)]);
+  indexSpeakers(); updateUrl(); buildPanels(); setStatus(statusText());
+};
+$("offB").onchange = () => { S.offB = (+$("offB").value || 0) / 1000; drawAll(); };
+$("offWall").onclick = () => { const w = wallOffset(); if (w != null) { S.offB = w; $("offB").value = Math.round(w * 1000); drawAll(); } };
+$("tSpec").onchange = () => { drawAll(); };
 $("runB").onchange = async () => { await loadRun(1); indexSpeakers(); updateUrl(); buildPanels(); setStatus(statusText()); };
 $("reload").onclick = async () => { await loadSessions(true); await openSession($("session").value, false); };
 for (const id of ["tVad", "tText", "tWords", "tSpk", "tWordP", "tEv", "tLag"]) $(id).onchange = () => { buildTables(); drawAll(); };
