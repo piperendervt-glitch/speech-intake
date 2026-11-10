@@ -90,14 +90,14 @@ replay（実時間）の購読側の出力（`conv2_ja_kokoro.wav`、live.yaml�
 
 ## 未解決点
 
-- **人が話したマイク録音での遅れ**：上の数字は録音の流し直し。マイクの入力の遅れ（PortAudio の見積もり 32 ms）が `start_wall` に足されるはずだが、実際に話して確かめていない。`python -m intake -c config/live.yaml record` と `python tools/subscribe.py --events` を並べて話し、`python tools/live_latency.py <session> --run live` で見られる。
+- **人が話したマイク録音での遅れ**：上の数字は録音の流し直し。マイクでは、音が届いてからチャンクとして受け取るまでの入力の遅れ（PortAudio の見積もり 32 ms）が上の数字に足される。`t_emit` はチャンクが届いた時刻から音声の時計を決めるので、この分は `start_wall` に現れない。実際に話して確かめてはいない。`python -m intake -c config/live.yaml record` と `python tools/subscribe.py --events` を並べて話し、`python tools/live_latency.py <session> --run live` で見られる。
 - `start_frames` の既定（live.yaml の 2）は合成音声で決めた。実際の部屋の雑音・咳・相槌で `speech_start` が出すぎないかは、閲覧画面（`trace/vad_cand.jsonl` の候補と通知の印）で見て調整する必要がある。
 - 最初の区間だけ STT が 2〜3 倍遅い（温まり）。起動時に空の音声で一度 STT を回す手はあるが、入れていない。
 - エコーキャンセルはしていない（ヘッドホン前提）。
 
 ## turn-bench への申し送り
 
-- 割り込みには `speech_start` を使う。話し始めから約 75 ms で届く（`start_frames: 2` のとき。1 にすると 32 ms 早まるが雑音で出やすい）。
+- 割り込みには `speech_start` を使う。話し始めから約 75 ms（マイクなら入力の遅れ 約 32 ms が加わる）で届く（`start_frames: 2` のとき。1 にすると 32 ms 早まるが雑音で出やすい）。
 - `speech_start` の後に `speech_dropped`（`vad_short` / `stt_empty`）が来ることがある。咳・物音・短い相槌で AI を黙らせた後、それが発話でなかったと分かるのはこの時点。どう扱うか（再開するか）は turn-bench の判断。
 - 返答を始める合図に `speech_end` を使うと、黙ってから約 320 ms。文字が要るなら `utterance` を待って ＋約 200 ms。`min_silence_ms` を短くすれば早まるが、1 文が細切れになる。
 - `seg` で突き合わせる。`utterance` の `id` とは別の番号。次の区間の `speech_start` が前の区間の `utterance` より先に来ることがある。
