@@ -86,8 +86,8 @@ def cmd_record(a, cfg, store):
                      latency=cfg["capture"].get("latency"))
     cap.prepare()  # run の出力（runs/<run>/）より先にセッションを作る
     signal.signal(signal.SIGINT, lambda *_: cap.stop())
-    if a.seconds:
-        threading.Timer(a.seconds, cap.stop).start()
+    if a.seconds:  # 録音した長さで止める（モデルの読み込みの時間は数えない）
+        cap.max_samples = int(a.seconds * cfg["sample_rate"])
     print(f"[intake] 録音中… Ctrl+C で止める → {store.audio_path(sid)}", file=sys.stderr)
     _run(cfg, store, sid, a.run or cfg["run_name"], "mic", cap.chunks())
     signal.signal(signal.SIGINT, signal.default_int_handler)

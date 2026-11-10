@@ -65,6 +65,7 @@ class MicCapture:
         self.samples_written = 0
         self.t0_unix: float | None = None
         self._prepared = False
+        self.max_samples: int | None = None  # これだけ録ったら止める（record --seconds）
 
     def stop(self) -> None:
         self._stop.set()
@@ -127,6 +128,8 @@ class MicCapture:
                             wav.flush()  # ヘッダを更新し、録音中でも閲覧画面から読めるようにする
                             last_flush = time.monotonic()
                         yield AudioChunk(t0=t0, samples=block, sample_rate=self.sample_rate)
+                        if self.max_samples is not None and self.samples_written >= self.max_samples:
+                            self.stop()
                     # 止めた後に残ったブロックも保存する
                     while not self._q.empty():
                         block = self._q.get_nowait()

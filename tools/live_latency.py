@@ -53,7 +53,11 @@ def main() -> None:
     ap.add_argument("--sessions", default="sessions")
     ap.add_argument("--json", action="store_true", help="区間ごとの表を JSON で出す")
     a = ap.parse_args()
-    tab = table(rows(Path(a.sessions) / a.session / "runs" / a.run / "trace" / "events.jsonl"))
+    path = Path(a.sessions) / a.session / "runs" / a.run / "trace" / "events.jsonl"
+    if not path.exists():
+        print(f"{path} が無い（VAD 区間が 1 つも無かったか、段10 より前の run）")
+        return
+    tab = table(rows(path))
     if a.json:
         print(json.dumps(tab, ensure_ascii=False, indent=1))
         return
