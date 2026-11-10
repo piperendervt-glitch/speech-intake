@@ -100,6 +100,17 @@ python -m intake view    # 「通知」「遅れを帯で」をオン
 
 メッセージの順序と `seg` での対応付けは `docs/INTEGRATION_JA.md` §5。
 
+### turn-bench からの申し送り（段11）
+
+```bash
+python -m intake -c config/live.yaml record --input ja1          # AirPods のマイク（subvocal-robot の airpods.bat が送る JA1 行、127.0.0.1:9750）
+python tools/send_ja1.py samples/conv2_ja_kokoro.wav             # AirPods が無いときの試験用の送り手
+python -m intake -c config/live_partial.yaml record              # 暫定の文字（partial）も配る
+python tools/subscribe.py --events --min-silence-ms 200          # 繋いだときに VAD の min_silence_ms を変える
+```
+
+`hello` の `info` に `sessions_dir` / `session_dir`（絶対パス）が入る。詳しくは `docs/INTEGRATION_JA.md` §5.5、報告は `docs/REPORT_段11.md`。
+
 ## 段ごとの報告
 
 `docs/REPORT_段n.md`。ダウンロードや長い処理の事前記録は `docs/LOG.md`。

@@ -36,14 +36,20 @@ def table(ev: list[dict]) -> list[dict]:
             g["end_confirm"] = (e["t_detect"] - e["t1"]) * 1000
         elif e["type"] == "speech_dropped":
             g["result"] = f"dropped:{e['reason']}"
+        elif e["type"] == "partial" and "partial_unix" not in g:
+            g["partial_unix"] = e["t_unix"]
         elif e["type"] == "utterance" and "stt" not in g:
             g["stt"] = (e["stt_done_unix"] - e["vad_close_unix"]) * 1000
             g["utt_after_end"] = (e["t_unix"] - e["vad_close_unix"]) * 1000
             g["result"] = e["id"]
+            if "partial_unix" in g:  # 最初の暫定の文字が、確定の utterance よりどれだけ先に出たか（段11）
+                g["partial_lead"] = (e["t_unix"] - g["partial_unix"]) * 1000
+    for g in segs.values():
+        g.pop("partial_unix", None)
     return [segs[k] for k in sorted(segs)]
 
 
-COLS = ("start_confirm", "start_wall", "end_confirm", "stt", "utt_after_end")
+COLS = ("start_confirm", "start_wall", "end_confirm", "stt", "utt_after_end", "partial_lead")
 
 
 def main() -> None:

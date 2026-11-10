@@ -39,6 +39,8 @@ class SileroVad:
       {"type": "speech_start", "seg", "t", "t_detect", "p"}     t = 始まりの枠の先頭、t_detect = 確定した枠の終わり（セッション秒）
       {"type": "speech_end", "seg", "t0", "t1", "t_detect"}     t0/t1 = 余白込みの区間（feed が返す VadSegment と同じ）
       {"type": "speech_dropped", "seg", "reason": "vad_short"}  min_speech_ms に届かず区間を捨てたとき（speech_end の直後）
+
+    段11：open_segment() は開いている区間（暫定の文字用）、set_params() は動かしたままの設定変更（min_silence_ms / start_frames）。
     """
 
     def __init__(
@@ -171,6 +173,27 @@ class SileroVad:
             self._close(end, out, now, limit=now)
         self._cand = None
         return out
+
+    def open_segment(self) -> tuple[int, float, float | None] | None:
+        """開いている区間があれば (seg, 始まり t, 黙り始めた t または None)。暫定の文字（段11）を出す判断に使う。"""
+        if self._start is None:
+            return None
+        return self._seg, self._start, self._temp_end
+
+    def set_params(self, **kw) -> dict:
+        """動かしたまま変えられる設定（段11。購読側からの set）。変えた後の値を返す。"""
+        for k, v in kw.items():
+            if k == "min_silence_ms":
+                if isinstance(v, bool) or not isinstance(v, (int, float)) or not 32 <= v <= 5000:
+                    raise ValueError(f"vad.min_silence_ms は 32〜5000 の数: {v!r}")
+                self.min_silence = v / 1000
+            elif k == "start_frames":
+                if isinstance(v, bool) or not isinstance(v, int) or not 1 <= v <= 50:
+                    raise ValueError(f"vad.start_frames は 1〜50 の整数: {v!r}")
+                self.start_frames = v
+            else:
+                raise ValueError(f"動かしたまま変えられるのは vad.min_silence_ms / vad.start_frames だけ: {k!r}")
+        return {"min_silence_ms": round(self.min_silence * 1000), "start_frames": self.start_frames}
 
     def drain_events(self) -> list[dict]:
         e, self._events = self._events, []
