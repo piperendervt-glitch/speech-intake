@@ -12,8 +12,9 @@ DEFAULTS: dict[str, Any] = {
     "sessions_dir": "sessions",
     "run_name": "default",
     "sample_rate": 16000,
-    "capture": {"provider": "sounddevice", "device": None, "block_ms": 32},
+    "capture": {"provider": "sounddevice", "device": None, "block_ms": 32, "latency": None},
     "replay": {"speed": "fast", "chunk_ms": 32},
+    "pipeline": {"stt_thread": False},  # true: STT 以降を別スレッドで（VAD の通知が STT を待たない。段10）
     "vad": {"provider": "none"},
     "stt": {"provider": "none"},
     "speaker": {"provider": "none"},

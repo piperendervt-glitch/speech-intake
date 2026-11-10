@@ -82,7 +82,8 @@ def cmd_record(a, cfg, store):
     dev = a.device if a.device is not None else cfg["capture"].get("device")
     if isinstance(dev, str) and dev.isdigit():
         dev = int(dev)
-    cap = MicCapture(store, sid, sample_rate=cfg["sample_rate"], device=dev, block_ms=cfg["capture"]["block_ms"])
+    cap = MicCapture(store, sid, sample_rate=cfg["sample_rate"], device=dev, block_ms=cfg["capture"]["block_ms"],
+                     latency=cfg["capture"].get("latency"))
     signal.signal(signal.SIGINT, lambda *_: cap.stop())
     if a.seconds:
         threading.Timer(a.seconds, cap.stop).start()

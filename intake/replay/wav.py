@@ -18,6 +18,8 @@ class WavReplay:
     """sessions/<sid>/audio.wav を AudioChunk の列として流す。
 
     speed="realtime" は音声の長さどおりに待ちながら流す（ライブと同じ条件で各段を試すため）。
+    マイクと同じく、チャンクの終わりの時刻になってから渡す（段10。段1〜9 はチャンクの先頭の時刻に渡していて、
+    chunk_ms だけ早く届いていた）。
     speed="fast" は待たずに流す。
     """
 
@@ -43,7 +45,7 @@ class WavReplay:
                 t0 = pos / self.sample_rate
                 pos += len(block)
                 if self.speed == "realtime":
-                    wait = start + t0 - time.monotonic()
+                    wait = start + pos / self.sample_rate - time.monotonic()
                     if wait > 0:
                         time.sleep(wait)
                 yield AudioChunk(t0=t0, samples=np.ascontiguousarray(block, dtype=np.float32), sample_rate=self.sample_rate)

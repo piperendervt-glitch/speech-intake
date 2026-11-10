@@ -2,12 +2,17 @@
 
 送るメッセージ（JSON 1 つ = 1 メッセージ）:
   {"type": "hello",     "info": {...run.json と同じ...}}          接続直後と、新しい run の開始時
-  {"type": "utterance", "record": {...発話レコード...}}            発話レコードが 1 つ確定するたび
+  {"type": "speech_start", "seg", "t", "t_detect", "t_unix", "p"}  VAD が発話の始まりを確定した時点（STT を待たない。段10）
+  {"type": "speech_end",   "seg", "t0", "t1", "t_detect", "t_unix"}  VAD が区間を閉じた時点（STT を待たない）
+  {"type": "speech_dropped", "seg", "reason", "t_unix"}           区間から発話レコードが出ないと決まったとき（vad_short / stt_empty）
+  {"type": "utterance", "record": {...発話レコード...}, "seg", "timing": {"vad_close_unix", "stt_done_unix"}}
+                                                                   発話レコードが 1 つ確定するたび（seg / timing は段10 で追加）
   {"type": "revise",    "records": [...発話レコードの全列...]}     話者の付け直しなどで列全体が変わったとき（同じ id を置き換える）
   {"type": "trace",     "stage": "vad" | "speaker", "row": {...}}  段ごとの記録（購読時に ?trace=1 を付けたときだけ）
   {"type": "end",       "stats": {...}}                            入力の終わり
 
 途中から接続しても、その run の hello と、それまでの発話レコードが先に届く（取りこぼさない）。
+speech_start / speech_end / speech_dropped は再送しない（その時点で接続していた購読者にだけ届く）。
 """
 
 from __future__ import annotations
@@ -102,12 +107,19 @@ class WebSocketSink:
         return None
 
     def trace(self, stage: str, obj: dict[str, Any]) -> None:
-        if stage == "vad_prob":  # 枠ごとの確率は量が多いので配らない
+        if stage in ("vad_prob", "events"):  # 枠ごとの確率は量が多い／events は event() で配っている
             return
         self._send({"type": "trace", "stage": stage, "row": obj}, trace=True)
 
-    def emit(self, utt: Utterance) -> None:
-        m = {"type": "utterance", "record": utt.to_dict()}
+    def event(self, msg: dict[str, Any]) -> None:
+        self._send(msg)  # backlog に入れない（途中から来た購読者には再送しない）
+
+    def emit(self, utt: Utterance, seg: int | None = None, timing: dict[str, float] | None = None) -> None:
+        m: dict[str, Any] = {"type": "utterance", "record": utt.to_dict()}
+        if seg is not None:
+            m["seg"] = seg
+        if timing:
+            m["timing"] = timing
         self._backlog.append(m)
         self._send(m)
 
