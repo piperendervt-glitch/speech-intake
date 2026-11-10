@@ -64,3 +64,8 @@ tr.utt:hover, tr.utt.playing { background: var(--sel); }
 .bar { display: inline-block; height: 8px; background: var(--op-sub); vertical-align: middle; border-radius: 2px; }
 .ev-start { background: var(--ev-start); } .ev-end { background: var(--ev-end); }
 .ev-utt { background: var(--ev-utt); } .ev-drop { background: var(--ev-drop); } .ev-partial { background: var(--ev-partial); }
+#devcheck { margin: 10px 0; }
+#devcheck details { margin-bottom: 10px; }
+#devcheck th { width: 6em; white-space: nowrap; }
+canvas.spectrum { margin-top: 6px; }
+#offB { width: 6em; font: inherit; color: inherit; background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 2px 6px; }

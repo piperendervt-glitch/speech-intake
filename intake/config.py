@@ -14,7 +14,11 @@ DEFAULTS: dict[str, Any] = {
     "sample_rate": 16000,
     "capture": {
         "provider": "sounddevice",  # sounddevice（マイク）/ ja1_udp（subvocal-robot の airpods.bat が送る JA1 行。段11）
-        "device": None,
+        "device": None,          # 番号か名前の一部（段11）。"AirPods@MME" のように @ でホスト API も絞れる
+        "hostapi": None,         # 名前で選ぶときにホスト API（MME / WASAPI など）を絞る（名前の一部）
+        "device_rate": None,     # 機器を開くレート。null = 16 kHz で開き、断られたら機器の既定で開いて 16 kHz に直す / native / 数
+        "stall_s": 2.0,          # 録音中にこの秒数音が届かなければ機器が消えたとみなして止める（それまでは保存）
+        "latency_ms": 0,         # 入力の遅れ（Bluetooth など。tools/latency_pair.py で測る）。通知の t_said_unix の補正に使う
         "block_ms": 32,
         "latency": None,
         "udp": {"host": "127.0.0.1", "port": 9750, "source": None},  # ja1_udp の待ち受け（localhost のみ）

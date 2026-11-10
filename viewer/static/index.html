@@ -13,12 +13,16 @@
     <label title="参照 run の run.json の group（話者の属性）で絞る">群 <select id="group"><option value="">すべて</option></select></label>
     <label>セッション <select id="session"></select></label>
     <label>設定 A <select id="runA"></select></label>
+    <label title="別のセッション（例：AirPods と PC のマイク）を B に並べる。latency_pair で録った組は相手が初めから選ばれる">比較のセッション <select id="sessionB"></select></label>
     <label>設定 B（比較） <select id="runB"></select></label>
+    <label title="B の時刻 = A の時刻 + この値。既定は録音開始の壁時計の差（session.json の t0_unix）で、同じ瞬間が縦に揃う">B のずらし <input type="number" id="offB" step="1" value="0" disabled> ms</label>
+    <button id="offWall" title="録音開始の壁時計の差に戻す" disabled>壁時計で合わせる</button>
     <button id="reload" title="一覧と結果を読み直す">再読込</button>
     <span id="status" class="muted"></span>
   </div>
   <div class="row">
     <label title="VAD 区間（緑の帯）と枠ごとの確率（緑の線）・閾値（点線）"><input type="checkbox" id="tVad" checked> VAD 区間</label>
+    <label title="0〜8 kHz。点線は 4 kHz（これより上が空なら狭帯域。段11）"><input type="checkbox" id="tSpec"> スペクトログラム</label>
     <label><input type="checkbox" id="tText" checked> 文字</label>
     <label><input type="checkbox" id="tWords"> 単語時刻</label>
     <label><input type="checkbox" id="tSpk" checked> 話者の色分け</label>
@@ -48,12 +52,14 @@
     波形の何もない所をクリック：そこから再生／スペース：再生・停止／マウスを重ねると元のレコードを表示／
     音素をクリック：その音素の前後だけ再生
   </p>
+  <div id="devcheck"></div>
   <div id="aligns"></div>
   <div id="tables"></div>
   <div id="summary"></div>
 </main>
 <div id="tip" hidden></div>
 <audio id="audio" preload="auto"></audio>
+<audio id="audioB" preload="auto"></audio>
 <script src="/static/app.js"></script>
 </body>
 </html>
