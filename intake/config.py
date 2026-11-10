@@ -17,6 +17,7 @@ DEFAULTS: dict[str, Any] = {
     "vad": {"provider": "none"},
     "stt": {"provider": "none"},
     "speaker": {"provider": "none"},
+    "phones": {"provider": "none"},
     "sink": {
         "jsonl": True,
         "websocket": {"enabled": False, "host": "127.0.0.1", "port": 8766},

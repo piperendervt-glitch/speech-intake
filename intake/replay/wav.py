@@ -72,10 +72,18 @@ def import_audio(store: SessionStore, src: str | Path, sample_rate: int = 16000,
             check=True,
         )
     else:
-        data, sr = sf.read(str(src), dtype="float32", always_2d=True)
+        data, sr = sf.read(str(src), dtype="float32", always_2d=True)  # libsndfile 1.1 以降は mp3 も読める
+        x = data.mean(axis=1)
         if sr != sample_rate:
-            raise RuntimeError(f"ffmpeg が無いためリサンプルできない（{sr} Hz → {sample_rate} Hz）")
-        sf.write(str(dst), data.mean(axis=1), sample_rate, subtype="PCM_16")
+            try:
+                from math import gcd  # noqa: PLC0415
+
+                from scipy.signal import resample_poly  # noqa: PLC0415
+            except ImportError:
+                raise RuntimeError(f"ffmpeg も scipy も無いためリサンプルできない（{sr} Hz → {sample_rate} Hz）") from None
+            g = gcd(sr, sample_rate)
+            x = resample_poly(x, sample_rate // g, sr // g).astype("float32")
+        sf.write(str(dst), x, sample_rate, subtype="PCM_16")
     info = sf.info(str(dst))
     store.update_meta(sid, status="done", duration=round(info.frames / info.samplerate, 3))
     return sid

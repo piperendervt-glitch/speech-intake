@@ -4,7 +4,8 @@
 const $ = (id) => document.getElementById(id);
 const css = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
 const SPK_COLORS = ["#e8590c", "#1c7ed6", "#2f9e44", "#ae3ec9", "#f59f00", "#0ca678", "#d6336c", "#5c7cfa"];
-const LANES = { wave: 110, spk: 28, text: 46, words: 38 };
+const LANES = { wave: 110, spk: 28, text: 46, words: 38, phones: 34, ref: 34 };
+const OP_LABEL = { match: "一致", sub: "置換", del: "脱落", ins: "挿入" };
 
 const S = {
   sessions: [],
@@ -17,6 +18,7 @@ const S = {
   hover: null,
   spkIndex: {},
   pollTimer: null,
+  summaryKey: null,
 };
 
 // ---------- data ----------
@@ -28,18 +30,24 @@ async function getJSON(url) {
 
 async function loadSessions(keep = true) {
   S.sessions = await getJSON("/api/sessions");
+  const gsel = $("group");
+  const gprev = gsel.value || new URLSearchParams(location.search).get("group") || "";
+  const groups = [...new Set(S.sessions.map((s) => s.group).filter(Boolean))].sort();
+  gsel.innerHTML = '<option value="">すべて</option>' + groups.map((g) => `<option value="${esc(g)}">${esc(g)}</option>`).join("");
+  if (groups.includes(gprev)) gsel.value = gprev;
   const sel = $("session");
   const prev = keep ? S.sid : null;
   sel.innerHTML = "";
-  for (const s of S.sessions) {
+  for (const s of S.sessions.filter((x) => !gsel.value || x.group === gsel.value)) {
     const o = document.createElement("option");
     const m = s.meta || {};
     const dur = m.duration != null ? `${fmtTime(m.duration)}` : m.status === "recording" ? "録音中" : "";
     o.value = s.session;
-    o.textContent = `${s.session}  ${dur}  ${m.source || ""}${m.original ? " (" + m.original + ")" : ""}`;
+    o.textContent = `${s.session}  ${dur}  ${m.source || ""}${m.original ? " (" + m.original + ")" : ""}${s.group ? "  [" + s.group + "]" : ""}`;
     sel.appendChild(o);
   }
-  const want = prev || new URLSearchParams(location.search).get("session") || (S.sessions[0] && S.sessions[0].session);
+  const avail = [...sel.options].map((o) => o.value);
+  const want = [prev, new URLSearchParams(location.search).get("session")].find((x) => x && avail.includes(x)) || avail[0];
   if (want) sel.value = want;
   if (!S.sessions.length) setStatus("セッションがありません（python -m intake record / import で作る）");
 }
@@ -62,7 +70,8 @@ function fillRunSelects() {
       const o = document.createElement("option");
       o.value = r.run;
       const p = r.providers || {};
-      o.textContent = `${r.run}  [vad:${p.vad || "?"} stt:${p.stt || "?"} spk:${p.speaker || "?"}]`;
+      o.textContent = r.ref ? `${r.run}  [参照: ${r.ref.source} / ${r.ref.by || "?"}]`
+        : `${r.run}  [vad:${p.vad || "?"} stt:${p.stt || "?"} spk:${p.speaker || "?"}${p.phones && p.phones !== "none" ? " phones:" + p.phones : ""}]`;
       sel.appendChild(o);
     }
     if (prev && runs.some((r) => r.run === prev)) sel.value = prev;
@@ -84,7 +93,33 @@ async function loadRun(idx) {
   const name = $(idx === 0 ? "runA" : "runB").value;
   if (!name) { S.runs[idx] = null; return; }
   const d = await getJSON(`/api/sessions/${S.sid}/runs/${encodeURIComponent(name)}`);
-  S.runs[idx] = { name, ...d };
+  S.runs[idx] = prepRun({ name, ...d });
+}
+
+// 音素：認識器の音素の一覧と、選んだ参照（ref / ref_g2p）との整列結果を引きやすくしておく
+function prepRun(r) {
+  if (!r) return r;
+  r.isRef = !!(r.info && r.info.ref);
+  r.phones = [];
+  for (const u of r.utterances) for (const p of u.phones || []) r.phones.push({ ...p, utt: u.id, src: u.phones_source, model: u.phones_model });
+  const all = r.trace.phones_align || [];
+  const kinds = [...new Set(all.map((x) => x.ref_run))];
+  const want = $("refKind").value;
+  r.refRun = kinds.includes(want) ? want : kinds[0] || null;
+  r.align = all.filter((x) => x.ref_run === r.refRun);
+  r.hypOps = [];
+  for (const row of r.align) for (const o of row.ops) if (o.hyp != null) r.hypOps.push(o);
+  r.hypOps.sort((a, b) => a.t0 - b.t0);
+  return r;
+}
+
+function opOfPhone(r, p) {
+  const ops = r.hypOps;
+  if (!ops || !ops.length || p.t0 == null) return null;
+  let a = 0, b = ops.length;
+  while (a < b) { const m = (a + b) >> 1; if (ops[m].t0 <= p.t0 + 1e-4) a = m + 1; else b = m; }
+  const o = ops[a - 1];
+  return o && p.t0 >= o.t0 - 1e-4 && p.t0 <= o.t1 + 1e-4 ? o : null;
 }
 
 function indexSpeakers() {
@@ -143,6 +178,7 @@ function schedulePoll() {
 function updateUrl() {
   const q = new URLSearchParams();
   q.set("session", S.sid);
+  if ($("group").value) q.set("group", $("group").value);
   if ($("runA").value) q.set("runA", $("runA").value);
   if ($("runB").value) q.set("runB", $("runB").value);
   history.replaceState(null, "", "?" + q.toString());
@@ -186,6 +222,10 @@ function panelLayout() {
   if ($("tSpk").checked) L.push({ key: "spk", h: LANES.spk });
   if ($("tText").checked) L.push({ key: "text", h: LANES.text });
   if ($("tWords").checked) L.push({ key: "words", h: LANES.words });
+  if ($("tPhones").checked) {
+    L.push({ key: "phones", h: LANES.phones });
+    if (S.runs.some((r) => r && r.align && r.align.length)) L.push({ key: "ref", h: LANES.ref });
+  }
   let y = 0;
   for (const l of L) { l.y = y; y += l.h; }
   return { lanes: L, height: y };
@@ -203,7 +243,9 @@ function buildPanels() {
     const label = idx === 0 ? "A" : "B";
     if (r) {
       const p = r.info.providers || {};
-      h.innerHTML = `${label}: ${esc(r.name)}<span class="muted">vad=${esc(p.vad)} / stt=${esc(p.stt)} / speaker=${esc(p.speaker)} / 発話 ${r.utterances.length} 件 / ${esc(r.info.source || "")}</span>`;
+      const ph = r.isRef ? ` / 参照（${esc(r.info.ref.source)}: ${esc(r.info.ref.by)}）。音素に時刻は無く、発話の中に均等に並べて表示`
+        : p.phones && p.phones !== "none" ? ` / phones=${esc(p.phones)}${r.refRun ? ` / 差分の参照=${esc(r.refRun)}` : ""}` : "";
+      h.innerHTML = `${label}: ${esc(r.name)}<span class="muted">vad=${esc(p.vad)} / stt=${esc(p.stt)} / speaker=${esc(p.speaker)}${ph} / 発話 ${r.utterances.length} 件 / ${esc(r.info.source || "")}${r.info.group ? " / 群=" + esc(r.info.group) : ""}</span>`;
     } else {
       h.innerHTML = `${label}: 波形のみ<span class="muted">この録音はまだ流し直していない（python -m intake replay ${esc(S.sid)}）</span>`;
     }
@@ -214,6 +256,8 @@ function buildPanels() {
     attachPointer(cv);
   }
   buildTables();
+  buildAligns();
+  buildSummary();
   drawAll();
 }
 
@@ -468,6 +512,10 @@ function drawPanel(cv, layout) {
           row++;
           ctx.fillStyle = css("--utt");
           ctx.fillRect(x0, yy, Math.max(1, x1 - x0), 14);
+          if ($("tWordP").checked && wd.p != null) {
+            ctx.fillStyle = `rgba(${css("--lowp")}, ${(0.85 * (1 - wd.p)).toFixed(3)})`;
+            ctx.fillRect(x0, yy, Math.max(1, x1 - x0), 14);
+          }
           ctx.fillStyle = css("--utt-edge");
           ctx.fillRect(x0, yy, 1, 14);
           ctx.fillStyle = css("--fg");
@@ -477,6 +525,8 @@ function drawPanel(cv, layout) {
         }
       }
     }
+    if (L.key === "phones") drawPhones(ctx, w, L, r, hits);
+    if (L.key === "ref") drawRefLane(ctx, w, L, r, hits);
   }
   if (S.play && S.play.t1 != null) {
     const x0 = tToX(S.play.t0, w), x1 = tToX(S.play.t1, w);
@@ -487,6 +537,165 @@ function drawPanel(cv, layout) {
   }
   drawPlayhead(ctx, w, h);
   cv._hits = hits;
+}
+
+const PAD = 0.15; // 音素をクリックしたときに前後に足して再生する秒
+const opColor = (op) => css(op ? `--op-${op}` : "--op-none");
+
+function phLabel(orig, cls) {
+  return $("phMode").value === "cls" && cls ? cls : orig || cls || "";
+}
+
+// 時刻の無い参照の音素（human / g2p）は、発話の中に均等に並べる
+function refPhonePositions(r) {
+  const out = [];
+  for (const u of r.utterances) {
+    const ps = u.phones || [];
+    const n = ps.length;
+    ps.forEach((p, i) => {
+      const t0 = p.t0 != null ? p.t0 : u.t0 + ((u.t1 - u.t0) * i) / Math.max(n, 1);
+      const t1 = p.t1 != null ? p.t1 : u.t0 + ((u.t1 - u.t0) * (i + 1)) / Math.max(n, 1);
+      out.push({ ...p, t0, t1, utt: u.id, src: u.phones_source });
+    });
+  }
+  return out;
+}
+
+function drawPhones(ctx, w, L, r, hits) {
+  ctx.font = "12px ui-monospace, Consolas, 'Segoe UI Symbol', monospace";
+  const list = r.isRef ? refPhonePositions(r) : r.phones;
+  if (!list.length) {
+    ctx.fillStyle = css("--muted");
+    ctx.fillText(r.isRef ? "（この参照 run に音素は無い）" : "（音素なし：config/phones.yaml で流すと出る）", 6, L.y + L.h / 2 + 4);
+    return;
+  }
+  for (let i = 0; i < list.length; i++) {
+    const p = list[i];
+    const next = list[i + 1];
+    // CTC の音素は 20 ms の点に近いので、次の音素の頭まで（最大 0.3 秒）を表示の幅にする
+    const t1v = r.isRef ? p.t1 : Math.max(p.t1, Math.min(next && next.utt === p.utt ? next.t0 : p.t1 + 0.08, p.t0 + 0.3));
+    if (!visible(p.t0, t1v)) continue;
+    const x0 = tToX(p.t0, w), x1 = Math.max(tToX(t1v, w), x0 + 2);
+    const o = r.isRef ? null : opOfPhone(r, p);
+    ctx.fillStyle = opColor(o ? o.op : null);
+    ctx.globalAlpha = p.p != null ? 0.45 + 0.55 * p.p : 1;
+    ctx.fillRect(x0, L.y + 4, x1 - x0 - 1, L.h - 8);
+    ctx.globalAlpha = 1;
+    ctx.fillStyle = o && o.op !== "match" ? "#fff" : css("--fg");
+    const label = clipText(ctx, phLabel(p.ph, o ? o.hyp : null), x1 - x0 - 3);
+    if (label) ctx.fillText(label, x0 + 2, L.y + L.h / 2 + 4);
+    const rec = { ...p };
+    if (o) rec.align = o;
+    hits.push({ x0, x1, y0: L.y, y1: L.y + L.h, t0: Math.max(0, p.t0 - PAD), t1: p.t1 + PAD, rec,
+      kind: r.isRef ? `参照の音素（${p.src}）` : `認識した音素${o ? "：" + OP_LABEL[o.op] : ""}` });
+  }
+}
+
+// 参照の音素を、整列で対応した認識側の位置に置く。脱落は認識側の音素の間に赤い印
+function drawRefLane(ctx, w, L, r, hits) {
+  ctx.font = "12px ui-monospace, Consolas, 'Segoe UI Symbol', monospace";
+  if (!r.align || !r.align.length) {
+    ctx.fillStyle = css("--muted");
+    ctx.fillText(r.isRef ? "" : "（参照との整列なし：tools/ref_to_run.py で参照 run を作る）", 6, L.y + L.h / 2 + 4);
+    return;
+  }
+  for (const row of r.align) {
+    for (let i = 0; i < row.ops.length; i++) {
+      const o = row.ops[i];
+      if (o.ref == null) continue;
+      let t0 = o.t0, t1 = o.t1;
+      if (o.op !== "del") {
+        const nx = row.ops.slice(i + 1).find((x) => x.op !== "del");
+        t1 = Math.max(o.t1, Math.min(nx ? nx.t0 : o.t1 + 0.08, o.t0 + 0.3));
+      }
+      if (!visible(t0, t1 + 0.05)) continue;
+      let x0 = tToX(t0, w), x1 = Math.max(tToX(t1, w), x0 + 2);
+      if (o.op === "del") { const c = (x0 + x1) / 2; x0 = c - 5; x1 = c + 5; }
+      ctx.fillStyle = opColor(o.op);
+      ctx.fillRect(x0, L.y + 4, x1 - x0 - 1, L.h - 8);
+      ctx.fillStyle = o.op === "match" ? css("--fg") : "#fff";
+      const label = clipText(ctx, phLabel(o.ref_ph, o.ref), x1 - x0 - 3);
+      if (label) ctx.fillText(label, x0 + 2, L.y + L.h / 2 + 4);
+      hits.push({ x0, x1, y0: L.y, y1: L.y + L.h, t0: Math.max(0, t0 - PAD), t1: t1 + PAD,
+        rec: { ...o, ref_utt: row.ref_utt, ref_run: row.ref_run }, kind: `参照（${row.ref_run}）：${OP_LABEL[o.op]}` });
+    }
+  }
+}
+
+// 参照の発話ごとの整列を、音素の並びと単語の並びで表にする
+function buildAligns() {
+  const root = $("aligns");
+  root.innerHTML = "";
+  S.runs.forEach((r, idx) => {
+    if (!r || !r.align || !r.align.length || !$("tPhones").checked) return;
+    const d = document.createElement("details");
+    d.open = true;
+    const tot = { match: 0, sub: 0, del: 0, ins: 0 };
+    for (const row of r.align) for (const k in tot) tot[k] += row.counts[k];
+    d.innerHTML = `<summary>${idx === 0 ? "A" : "B"}: ${esc(r.name)} と参照 ${esc(r.refRun)} の整列（参照の発話 ${r.align.length} 件・` +
+      `一致 ${tot.match} / 置換 ${tot.sub} / 脱落 ${tot.del} / 挿入 ${tot.ins}）</summary>` +
+      `<p class="muted help">上段＝参照、下段＝認識器（${esc(r.align[0].phones_model || "")}）。並べただけで、誤りの判定ではない。音素や単語をクリックでその部分を再生。</p>`;
+    for (const row of r.align) {
+      const box = document.createElement("div");
+      const wc = row.words.counts;
+      box.innerHTML = `<div class="counts"><b>${esc(row.ref_utt)}</b> ${row.t0.toFixed(2)}–${row.t1.toFixed(2)} s　` +
+        `音素：一致 ${row.counts.match}・置換 ${row.counts.sub}・脱落 ${row.counts.del}・挿入 ${row.counts.ins}　` +
+        `単語（参照の文 vs Whisper）：一致 ${wc.match}・置換 ${wc.sub}・脱落 ${wc.del}・挿入 ${wc.ins}</div>`;
+      const ws = document.createElement("div");
+      ws.className = "wseq";
+      for (const o of row.words.ops) {
+        const sp = document.createElement("span");
+        sp.className = `op-${o.op}`;
+        sp.style.background = o.op === "match" ? "" : opColor(o.op);
+        sp.textContent = o.op === "match" ? o.hyp : o.op === "sub" ? `${o.ref}→${o.hyp}` : o.op === "del" ? `${o.ref}→∅` : `+${o.hyp}`;
+        sp.title = `${OP_LABEL[o.op]}  参照: ${o.ref ?? "∅"}  Whisper: ${o.hyp ?? "∅"}${o.p != null ? "  p=" + o.p : ""}`;
+        if (o.t0 != null) sp.onclick = () => { focusRange(o.t0, o.t1); playRange(Math.max(0, o.t0 - PAD), o.t1 + PAD); };
+        ws.appendChild(sp);
+      }
+      const seq = document.createElement("div");
+      seq.className = "seq";
+      let lastW = null;
+      for (const o of row.ops) {
+        const t = document.createElement("span");
+        t.className = `tok op-${o.op}`;
+        if (o.op !== "match") t.style.background = opColor(o.op);
+        const wtxt = o.w != null && o.w !== lastW ? (row.ref_text.split(/\s+/)[o.w] || "") : "";
+        if (o.w != null) lastW = o.w;
+        t.innerHTML = `<span class="w">${esc(wtxt) || "&nbsp;"}</span><span class="r">${esc(phLabel(o.ref_ph, o.ref) || "∅")}</span><span class="h">${esc(phLabel(o.hyp_ph, o.hyp) || "∅")}</span>`;
+        t.title = `${OP_LABEL[o.op]}  参照: ${o.ref_ph ?? "∅"} (${o.ref ?? "∅"})  認識: ${o.hyp_ph ?? "∅"} (${o.hyp ?? "∅"})${o.p != null ? "  p=" + o.p : ""}  ${o.t0}–${o.t1} s`;
+        t.onclick = () => { focusRange(o.t0, o.t1); playRange(Math.max(0, o.t0 - PAD), o.t1 + PAD); };
+        seq.appendChild(t);
+      }
+      box.append(ws, seq);
+      d.appendChild(box);
+    }
+    root.appendChild(d);
+  });
+}
+
+// 群ごとの集計（セッションごとの数と、多い置換・脱落・挿入の対）。数えるだけで合否は決めない
+async function buildSummary() {
+  const root = $("summary");
+  const r = S.runs[0];
+  if (!r || !r.align || !r.align.length || !$("tPhones").checked) { root.innerHTML = ""; S.summaryKey = null; return; }
+  const q = new URLSearchParams({ ref: r.refRun, run: r.name, group: $("group").value });
+  const key = q.toString();
+  if (key === S.summaryKey) return;
+  S.summaryKey = key;
+  let d;
+  try { d = await getJSON(`/api/align_summary?${key}`); } catch (e) { root.textContent = "集計に失敗: " + e.message; return; }
+  if (key !== S.summaryKey) return;
+  const max = Math.max(1, ...d.pairs.map(([, n]) => n));
+  const rows = d.sessions.map((x) => {
+    const c = x.counts, n = c.match + c.sub + c.del;
+    return `<tr class="utt" data-sid="${esc(x.session)}"><td class="num">${esc(x.session)}</td><td>${esc(x.group || "")}</td>` +
+      `<td class="num">${n}</td><td class="num">${c.match}</td><td class="num">${c.sub}</td><td class="num">${c.del}</td><td class="num">${c.ins}</td></tr>`;
+  }).join("");
+  const pairs = d.pairs.map(([k, n]) => `<tr><td class="mono">${esc(k)}</td><td class="num">${n}</td><td><span class="bar" style="width:${(120 * n / max).toFixed(0)}px"></span></td></tr>`).join("");
+  root.innerHTML = `<details open><summary>群の集計：参照 ${esc(d.ref)}・${d.group ? "群 " + esc(d.group) : "すべての群"}・セッション ${d.sessions.length} 件（粗いクラスで数えた）</summary>
+    <div class="tables"><div><table><thead><tr><th>セッション</th><th>群</th><th>参照の音素</th><th>一致</th><th>置換</th><th>脱落</th><th>挿入</th></tr></thead><tbody>${rows}</tbody></table></div>
+    <div><table><thead><tr><th>参照→認識（∅ は無し）</th><th>回数</th><th></th></tr></thead><tbody>${pairs}</tbody></table></div></div></details>`;
+  for (const tr of root.querySelectorAll("tr[data-sid]")) tr.onclick = () => { $("session").value = tr.dataset.sid; $("session").onchange(); };
 }
 
 // ---------- interaction ----------
@@ -585,10 +794,14 @@ function setStatus(t) {
 
 // ---------- wiring ----------
 $("session").onchange = () => { S.runs = [null, null]; openSession($("session").value); };
+$("group").onchange = async () => { await loadSessions(true); S.runs = [null, null]; if ($("session").value) await openSession($("session").value); };
+$("refKind").onchange = () => { S.runs.forEach(prepRun); S.summaryKey = null; buildPanels(); };
+$("phMode").onchange = () => { buildAligns(); drawAll(); };
+$("tPhones").onchange = () => { buildPanels(); };
 $("runA").onchange = async () => { await loadRun(0); indexSpeakers(); updateUrl(); buildPanels(); setStatus(statusText()); };
 $("runB").onchange = async () => { await loadRun(1); indexSpeakers(); updateUrl(); buildPanels(); setStatus(statusText()); };
 $("reload").onclick = async () => { await loadSessions(true); await openSession($("session").value, false); };
-for (const id of ["tVad", "tText", "tWords", "tSpk"]) $(id).onchange = () => { buildTables(); drawAll(); };
+for (const id of ["tVad", "tText", "tWords", "tSpk", "tWordP"]) $(id).onchange = () => { buildTables(); drawAll(); };
 $("zoomIn").onclick = () => zoomAt(0.5);
 $("zoomOut").onclick = () => zoomAt(2);
 $("zoomFit").onclick = () => { fitView(); drawAll(); };

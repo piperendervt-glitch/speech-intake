@@ -1,4 +1,4 @@
-# 利用側への申し送り（speech-intake v0.1）
+# 利用側への申し送り（speech-intake v0.2）
 
 speech-intake が出すのは**観察表**（発話レコードの列）だけ。解釈・要約・文脈判定などの推察は、各プロジェクトが
 **推察表**として別ファイルに書く。推察表の各行は、根拠にした発話レコードの id を `refs` で**必ず**参照する。
@@ -18,6 +18,7 @@ speech-intake が出すのは**観察表**（発話レコードの列）だけ�
 | text, lang, words | 文字起こし。words は単語ごとの `{w, t0, t1, p}`（p は STT が出した確率をそのまま転記） |
 | speaker, speaker_conf, speaker_source | 話者ラベル。source は `acoustic`（声で分離）/ `wearer`（装着者区間との重なり）/ `none`。conf は「その話者が発話の時間に占める割合」 |
 | vad, stt | 使った VAD・STT の名前（例 `silero-v6`, `faster-whisper-large-v3`） |
+| phones, phones_model, phones_source | schema 0.2。どう発音されたかの音素列（§4）。欄が無い 0.1 のレコードは空として読む |
 
 ---
 
@@ -122,9 +123,94 @@ spk = registry.create("speaker", cfg)      # SpeakerProvider
 |---|---|---|---|
 | VAD | `vad.feed(AudioChunk(t0, samples))` を順に、最後に `vad.flush()` | 16 kHz mono float32 | 閉じた区間 `list[VadSegment(t0, t1, vad, p)]` |
 | STT | `stt.transcribe(audio, t0, 16000)` | 区間の音声と、その先頭のセッション秒 | `list[SttResult(t0, t1, text, lang, words)]`（時刻はセッション秒） |
+| 音素 | `phones.recognize(audio, t0, 16000)`（`registry.create("phones", cfg)`） | 同上 | `list[Phone(ph, t0, t1, p)]`（IPA、セッション秒） |
 | 話者 | `spk.feed(chunk)`（全音声）→ `spk.finalize(utts)`。acoustic は `spk.diarize(audio, 16000)` で区間だけも取れる | 音声と発話レコード | 話者を付けた `list[Utterance]` |
 | 出力 | `JsonlSink(run_dir)` / `WebSocketSink()` の `start(info) → emit(utt) → revise(utts) → end(stats) → close()` | 発話レコード | ファイル / 配信 |
 
 - 全段をつないだものが `intake.pipeline.Pipeline`（`feed(chunk)` → `finish()`）。
 - provider は設定の `provider` 名で差し替える（`intake/registry.py`）。新しい実装は同じメソッドを持つクラスを書き、表に 1 行足す。
 - 段ごとの確認用の記録（VAD 区間・枠ごとの確率・話者分離の区間）は provider の `drain_trace()` から `(stage, row)` で取り出せる。
+
+---
+
+## 4. Lumi（英会話学習）：発音を音素で観察する
+
+Whisper は誤った発音を正しい英単語に直して書く（合成音声の誤読 very→berry・think→sink・thank→sank を、正しい綴りで書いた。
+Speech Accent Archive の日本語話者の朗読でも原文の 95% の語をそのまま書いた）。そこで speech-intake は、文字起こしとは別に
+**音素認識器が聞き取った音素列**を発話レコードに入れる。「期待される音素と違う＝誤り」という判定は推察なので、
+**Lumi が推察表（`refs` 必須）に書く**。speech-intake は判定しない。
+
+### 4.1 発話レコードの `phones` の読み方
+
+`config/phones.yaml`（VAD ＋ Whisper（`language: en`）＋ 音素認識）で流すと、各発話に次が入る。
+
+```json
+{"id": "utt_000003", "text": "I would like some lice with my dinner.", "words": [{"w": "lice", "t0": 2.31, "t1": 2.62, "p": 0.41}, …],
+ "phones": [{"ph": "l", "t0": 2.34, "t1": 2.36, "p": 0.93}, {"ph": "aɪ", "t0": 2.44, "t1": 2.46, "p": 0.97}, …],
+ "phones_model": "wav2vec2-lv-60-espeak-cv-ft", "phones_source": "model"}
+```
+
+- `ph` は認識器の IPA（eSpeak の表記。`aɪ` `tʃ` `ɚ` は 1 つ）。`t0`/`t1` はセッション秒で、CTC の「その音素が出た 20 ms の枠」。
+  区間の長さに意味は無い（点として扱う）。`p` は認識器の確率の転記。
+- 語の区切りは持たない（どの音素がどの語かは、時刻で `words` と突き合わせるか、下の整列結果の `w` を使う）。
+- `phones_source` は通常の run では `model` だけ。`human`（人間の転写）・`g2p`（文字からの辞書変換）は参照 run にだけ現れる。
+- 認識器は `phones.provider` で差し替える（`wav2vec2_espeak` が既定、`allosaurus` も可。違いは REPORT_段6）。
+
+### 4.2 参照 run（`ref` / `ref_g2p`）の作り方
+
+学習者が読むべき文が分かっているとき（音読課題など）、その文を参照にする。
+
+```bash
+python tools/ref_to_run.py <session> ref.json            # ref.json = {"group": "...", "lines": [{"t0", "t1", "text", "phones"?}]}
+```
+
+- `text` は G2P（g2p_en。CMUdict、同形異音語は品詞で読み分け）で `ref_g2p` に。「辞書上はこう読むはず」であって観察ではない。
+- `phones`（人間の IPA）があれば `ref`。
+- `t0`/`t1` を省くと録音全体。`--locate-run phones` で、文が読まれた範囲を Whisper の単語列から探す。
+- 書いた後、同じセッションの音素つき run を自動で整列する。参照を後から作っても、`python -m intake align <session>` でやり直せる。
+
+### 4.3 整列結果 `runs/<run>/trace/phones_align.jsonl`
+
+1 行 = 参照 run の発話 1 つ。発話レコードではない（閲覧画面と Lumi の材料）。
+
+```json
+{"ref_run": "ref_g2p", "group": "japanese", "ref_utt": "utt_000000", "t0": 0.5, "t1": 25.3, "ref_source": "g2p",
+ "ref_text": "Please call Stella. …", "hyp_utts": ["utt_000000", "utt_000001"], "phones_model": "wav2vec2-lv-60-espeak-cv-ft",
+ "counts": {"match": 190, "sub": 22, "del": 5, "ins": 4},
+ "ops": [{"op": "sub", "ref": "R", "hyp": "L", "ref_ph": "R", "hyp_ph": "l", "w": 12, "t0": 4.06, "t1": 4.08, "p": 0.88},
+         {"op": "del", "ref": "Z", "hyp": null, "ref_ph": "Z", "hyp_ph": null, "w": 20, "t0": 16.7, "t1": 16.8, "pos": "gap"}, …],
+ "words": {"counts": {…}, "ops": [{"op": "match", "ref": "bring", "hyp": "bring", "t0": 3.9, "t1": 4.2, "p": 0.97}, …]},
+ "table": "classes.yaml"}
+```
+
+- `op`：`match`（一致）/ `sub`（置換）/ `del`（参照にあって認識に無い）/ `ins`（認識にだけある）。粗いクラス（4.4）の上で比べる。
+- `ref`/`hyp` はクラス、`ref_ph`/`hyp_ph` は元の表記。`w` は参照の text を空白で切った何番目の語か。
+- `t0`/`t1` は認識側の音素の時刻。`del` は前後の音素の間（`pos: "gap"`、推定位置）。
+- `words` は参照の文と Whisper の単語列の整列（Whisper が文から逸れたか）。
+
+**Lumi の推察表の書き方（例）**：`sub` の行を材料に「誤りの候補」を書く。`refs` は `hyp_utts` の発話 id。
+
+```json
+{"id": "inf_0001", "refs": ["utt_000001"], "kind": "pron_error_candidate",
+ "value": {"word": "bring", "expected": "R", "heard": "L", "t0": 4.06, "t1": 4.08},
+ "by": "lumi/pron-v1", "conf": 0.6, "note": "speech-intake phones_align（ref_g2p 比）の sub。英語母語の対照群でも多い対なら conf を下げる"}
+```
+
+### 4.4 粗い音素クラス表 `intake/phones/classes.yaml`
+
+ARPAbet の 39 音素＋`DX`（弾き音）＋`Q`（声門閉鎖）の 41 クラス。認識器の IPA・人間の狭い IPA・G2P（ARPAbet）を同じクラスに丸める。
+補助記号は落とし、二重母音・破擦音は 1 クラス。表は YAML で直せる（直したら `python -m intake align` で整列し直す）。
+Lumi のスキルツリーの軸を切るときの最小単位に使える（例：L/R、TH/S/T、V/B、語末の Z/S）。
+
+### 4.5 3 コーパス（実際は 2）で見えた、認識器の得意・不得意
+
+Common Voice は要アカウントのため見送り。SAA（日本語話者 44 人＋英語母語 44 人）と IDEA（日本語話者 17 人）で見た。
+数は REPORT_段8・段9。
+
+- **拾える**：L↔R（日本語話者で G2P 比 L→R 45・R→L 21、英語母語では L→R 1）、TH→S/T、語末の Z→S、S→SH。
+  合成の誤読でも rice→lice・read→lead・sea→she・thank→sank は置換として出た。Whisper はこれらの語を正しい綴りで書いていることが多い。
+- **拾いにくい**：TH を S にした誤読を θ と聞くことがある（think→sink は出ず）。V→B は合成では出たが SAA では 1 件だけ。
+  母音の質の差は多く出るが、英語母語の対照群にも同じくらい出る（AH→AE・IY→EY・UW→AH）→ 認識器か G2P のくせ。
+- **誤りではない差が混ざる**：米語の弾き音（letter の t → `DX`）、G2P の読み（文脈の読み分けは品詞まで）、人間の転写者の流儀。
+- **使い方の勧め**：差の数をそのまま点数にしない。同じ文を英語母語の話者が読んだときにも多い対かどうか（閲覧画面の「群の集計」、
+  `tools/align_report.py`）で、学習者に特有の差かを見分ける。人間の IPA との一致率は wav2vec2 で日本語話者 77.6%・英語母語 86.6%。

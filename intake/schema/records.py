@@ -10,11 +10,14 @@ import re
 from dataclasses import asdict, dataclass, field
 from typing import Any
 
-SCHEMA_VERSION = "0.1"
+SCHEMA_VERSION = "0.2"
 
 UTT_ID_RE = re.compile(r"^utt_\d{6,}$")
 SESSION_RE = re.compile(r"^\d{8}_\d{6}(?:_[A-Za-z0-9-]+)?$")
 SPEAKER_SOURCES = ("acoustic", "wearer", "face", "script", "none")  # script = 合成サンプルの台本（正解）
+# phones の出どころ。model = 音素認識器が聞き取ったもの（観察）。human = 人間の音声転写、g2p = 文字からの辞書変換。
+# human / g2p は観察ではなく「参照」なので、通常の run には現れず、参照 run（ref / ref_g2p）にだけ入る。
+PHONES_SOURCES = ("model", "human", "g2p", "none")
 
 
 class SchemaError(ValueError):
@@ -49,6 +52,38 @@ class Word:
 
 
 @dataclass
+class Phone:
+    """音素 1 つ。ph は IPA 文字列（認識器・転写の表記そのまま）。
+
+    時刻はセッション秒。参照（human / g2p）には時刻が無いことがあり、そのときは None。
+    p は認識器が出した確率をそのまま転記（解釈ではない）。
+    w は参照だけが持つ「text を空白で切った何番目の語か」（認識器の音素には語の区切りが無いので持たない）。
+    """
+
+    ph: str
+    t0: float | None = None
+    t1: float | None = None
+    p: float | None = None
+    w: int | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        d: dict[str, Any] = {"ph": self.ph}
+        d["t0"] = None if self.t0 is None else round(self.t0, 3)
+        d["t1"] = None if self.t1 is None else round(self.t1, 3)
+        if self.p is not None:
+            d["p"] = round(self.p, 3)
+        if self.w is not None:
+            d["w"] = self.w
+        return d
+
+    @classmethod
+    def from_dict(cls, d: dict[str, Any]) -> "Phone":
+        t0, t1 = d.get("t0"), d.get("t1")
+        return cls(ph=d["ph"], t0=None if t0 is None else float(t0), t1=None if t1 is None else float(t1),
+                   p=d.get("p"), w=d.get("w"))
+
+
+@dataclass
 class Utterance:
     """観察表の 1 行。ここには観察（機械が測ったもの）だけを書く。"""
 
@@ -64,12 +99,17 @@ class Utterance:
     words: list[Word] = field(default_factory=list)
     vad: str | None = None
     stt: str | None = None
+    # schema 0.2：どう発音されたか（音素列）。欄が無い 0.1 のレコードは空として読む
+    phones: list[Phone] = field(default_factory=list)
+    phones_model: str | None = None
+    phones_source: str = "none"
 
     def to_dict(self) -> dict[str, Any]:
         d = asdict(self)
         d["t0"] = round(self.t0, 3)
         d["t1"] = round(self.t1, 3)
         d["words"] = [w.to_dict() for w in self.words]
+        d["phones"] = [p.to_dict() for p in self.phones]
         if self.speaker_conf is not None:
             d["speaker_conf"] = round(self.speaker_conf, 3)
         return d
@@ -90,6 +130,9 @@ class Utterance:
             words=[Word.from_dict(w) for w in d.get("words", [])],
             vad=d.get("vad"),
             stt=d.get("stt"),
+            phones=[Phone.from_dict(p) for p in d.get("phones") or []],
+            phones_model=d.get("phones_model"),
+            phones_source=d.get("phones_source", "none"),
         )
 
 
@@ -156,6 +199,17 @@ def validate_utterance(d: dict[str, Any]) -> None:
                 raise SchemaError(f"words の要素に {k} がない: {w!r}")
         _check_time("words.t0", w["t0"])
         _check_time("words.t1", w["t1"])
+    psrc = d.get("phones_source", "none")
+    if psrc not in PHONES_SOURCES:
+        raise SchemaError(f"phones_source は {PHONES_SOURCES} のどれか: {psrc!r}")
+    for ph in d.get("phones") or []:
+        if not isinstance(ph, dict) or not isinstance(ph.get("ph"), str) or not ph["ph"]:
+            raise SchemaError(f"phones の要素は ph（IPA 文字列）を持つ: {ph!r}")
+        for k in ("t0", "t1"):
+            if ph.get(k) is not None:
+                _check_time(f"phones.{k}", ph[k])
+        if psrc == "model" and (ph.get("t0") is None or ph.get("t1") is None):
+            raise SchemaError(f"認識器の音素（phones_source=model）は時刻を持つ: {ph!r}")
 
 
 def validate_inference(d: dict[str, Any]) -> None:

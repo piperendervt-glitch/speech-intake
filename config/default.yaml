@@ -19,6 +19,8 @@ stt:
   provider: none
 speaker:
   provider: none
+phones:
+  provider: none           # 音素の観察（config/phones.yaml）
 
 sink:
   jsonl: true

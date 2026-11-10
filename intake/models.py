@@ -1,6 +1,8 @@
 """モデルの取得（python -m intake models）。取得先は models/（git に入らない）。
 
   speaker  sherpa-onnx の話者分離モデル（GitHub k2-fsa/sherpa-onnx の releases から。約 40 MB）
+  phones   音素認識のモデル（-c config/phones.yaml の phones.provider。wav2vec2 は HuggingFace から約 1.3 GB、
+           allosaurus は約 20 MB。置き場所はそれぞれのライブラリの既定。何もしなくても初回の実行で取得される）
   whisper  faster-whisper のモデル（HuggingFace Systran/faster-whisper-* から。large-v3 は約 3 GB。置き場所は HuggingFace の既定キャッシュ）
            ※ 何もしなくても初回の実行時に自動で取得される。先に取っておきたいときだけ使う。
 
@@ -85,3 +87,28 @@ def fetch_whisper(name: str, root: Path) -> None:
     print(f"取得済み: {path}")
     with (root / "MANIFEST.txt").open("a", encoding="utf-8") as m:
         m.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')}\tfaster-whisper:{name}\t{path}\n")
+
+
+def fetch_phones(sec: dict, root: Path) -> None:
+    prov = sec.get("provider") or "wav2vec2_espeak"
+    root.mkdir(parents=True, exist_ok=True)
+    if prov == "allosaurus":
+        from .phones.allo import AllosaurusPhones  # noqa: PLC0415
+
+        model = sec.get("model") or "uni2005"
+        if "/" in model:  # phones.yaml の wav2vec2 の名前が残っているときは既定のモデルを取る
+            model = "uni2005"
+        p = AllosaurusPhones(model=model, lang=sec.get("lang", "eng"), device="cpu")
+        label = f"allosaurus:{model}"
+        print(f"取得済み: {p.name}")
+    else:
+        from huggingface_hub import snapshot_download  # noqa: PLC0415
+
+        name = sec.get("model") or "facebook/wav2vec2-lv-60-espeak-cv-ft"
+        if prov != "wav2vec2_espeak":
+            name = "facebook/wav2vec2-lv-60-espeak-cv-ft"
+        path = snapshot_download(name, allow_patterns=["*.json", "*.bin", "*.safetensors", "*.txt"])
+        label = f"hf:{name}"
+        print(f"取得済み: {path}")
+    with (root / "MANIFEST.txt").open("a", encoding="utf-8") as m:
+        m.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')}\t{label}\n")

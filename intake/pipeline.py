@@ -1,7 +1,7 @@
-"""段をつなぐ。入口（capture / replay）から AudioChunk を受け、vad → stt → speaker → sink と流す。
+"""段をつなぐ。入口（capture / replay）から AudioChunk を受け、vad → stt → phones → speaker → sink と流す。
 
 各段は関数境界で独立に呼べる（Lumi Bench 向け）：
-  vad.feed(chunk) / stt.transcribe(audio, t0, sr) / speaker.assign(utts) / sink.emit(utt)
+  vad.feed(chunk) / stt.transcribe(audio, t0, sr) / phones.recognize(audio, t0, sr) / speaker.assign(utts) / sink.emit(utt)
 """
 
 from __future__ import annotations
@@ -15,6 +15,7 @@ import numpy as np
 
 from . import __version__, registry
 from .audio import AudioChunk
+from .phones.base import assign_phones
 from .schema import SCHEMA_VERSION, Utterance, make_utterance_id
 
 
@@ -58,6 +59,7 @@ class Pipeline:
         self.stt = registry.create("stt", cfg)
         extra = {"session_dir": cfg["_session_dir"]} if cfg.get("speaker", {}).get("provider") == "wearer" and "_session_dir" in cfg else {}
         self.speaker = registry.create("speaker", cfg, **extra)
+        self.phones = registry.create("phones", cfg)  # STT の後に同じ区間で動く（GPU は STT 優先）
         self.buf = AudioBuffer(self.sr)
         self.utts: list[Utterance] = []
         self._n = 0
@@ -72,7 +74,7 @@ class Pipeline:
             "started_at": datetime.now().astimezone().isoformat(timespec="seconds"),
             "intake_version": __version__,
             "schema_version": SCHEMA_VERSION,
-            "providers": {"vad": self.vad.name, "stt": self.stt.name, "speaker": self.speaker.name},
+            "providers": {"vad": self.vad.name, "stt": self.stt.name, "speaker": self.speaker.name, "phones": self.phones.name},
             "config": public,
         }
 
@@ -96,6 +98,11 @@ class Pipeline:
                 )
             )
             self._n += 1
+        if self.phones.name != "none":
+            phs = self.phones.recognize(audio, seg.t0, self.sr)
+            self.stats["phones"] = self.stats.get("phones", 0) + len(phs)
+            for ph in assign_phones(new, phs, self.phones.name):  # 発話が無い区間の音素は trace にだけ残す
+                self.sink.trace("phones_orphan", {**ph.to_dict(), "model": self.phones.name})
         self.speaker.assign(new)
         for u in new:
             self.utts.append(u)
@@ -114,7 +121,7 @@ class Pipeline:
             self._segment(seg)
 
     def _drain(self) -> None:
-        for prov in (self.vad, self.stt, self.speaker):
+        for prov in (self.vad, self.stt, self.speaker, self.phones):
             for stage, row in getattr(prov, "drain_trace", lambda: [])():
                 self.sink.trace(stage, row)
 

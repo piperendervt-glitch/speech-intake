@@ -9,8 +9,10 @@
 """
 
 from .records import (
+    PHONES_SOURCES,
     SCHEMA_VERSION,
     Inference,
+    Phone,
     SchemaError,
     Utterance,
     VadSegment,
@@ -22,8 +24,10 @@ from .records import (
 from .jsonschema import INFERENCE_JSON_SCHEMA, UTTERANCE_JSON_SCHEMA
 
 __all__ = [
+    "PHONES_SOURCES",
     "SCHEMA_VERSION",
     "Inference",
+    "Phone",
     "SchemaError",
     "Utterance",
     "VadSegment",

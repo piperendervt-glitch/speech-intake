@@ -1,6 +1,6 @@
 [project]
 name = "speech-intake"
-version = "0.1.0"
+version = "0.2.0"
 description = "マイク／録音から発話レコード（いつ・誰が・何を言ったか）を出す入力モジュール"
 requires-python = ">=3.11"
 license = { text = "MIT" }
@@ -18,6 +18,11 @@ stt = ["faster-whisper>=1.0"]
 speaker = ["sherpa-onnx>=1.10"]
 speaker-pyannote = ["pyannote.audio>=3.3"]
 samples = ["kokoro>=0.9", "misaki[ja]>=0.9"]
+samples-en = ["kokoro>=0.9", "misaki[en]>=0.9"]
+# 音素の観察（段6）。torch は GPU 版を別に入れる（README）
+phones = ["transformers>=4.40", "huggingface_hub>=0.23"]
+phones-allosaurus = ["allosaurus>=1.0"]
+g2p = ["g2p_en>=2.1"]
 dev = ["pytest>=8", "psutil>=5.9"]
 
 [project.scripts]
@@ -33,6 +38,7 @@ include = ["intake*", "viewer*"]
 [tool.setuptools.package-data]
 viewer = ["static/*"]
 "intake.vad" = ["models/*"]
+"intake.phones" = ["classes.yaml"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

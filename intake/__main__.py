@@ -6,7 +6,8 @@
   python -m intake sessions                                             セッション一覧
   python -m intake devices                                              入力デバイス一覧
   python -m intake view     [-c config.yaml]                            閲覧画面（http://127.0.0.1:8765）
-  python -m intake models   speaker|whisper|all                         モデルを models/ に取得
+  python -m intake models   speaker|whisper|phones|all                  モデルを取得
+  python -m intake align    SESSION [--run R] [--ref ref ref_g2p]       参照 run と音素を整列（trace/phones_align.jsonl）
   python -m intake netcheck                                             待ち受けが localhost だけか確認
 """
 
@@ -55,6 +56,11 @@ def _run(cfg, store, sid, run, source, chunks):
     print(f"[intake] session={sid} run={run} vad={p.vad.name} stt={p.stt.name} speaker={p.speaker.name}", file=sys.stderr)
     stats = p.run(chunks, source)
     print(json.dumps({"session": sid, "run": run, **stats}, ensure_ascii=False))
+    if p.phones.name != "none":  # 参照 run（ref / ref_g2p）があれば整列しておく
+        from .phones.align import align_session  # noqa: PLC0415
+
+        for out in align_session(store.dir(sid), runs=[run], table_path=cfg.get("phones", {}).get("classes")):
+            print(f"[intake] 整列: {out}", file=sys.stderr)
     return stats
 
 
@@ -131,13 +137,26 @@ def cmd_view(a, cfg, store):
 
 
 def cmd_models(a, cfg, store):  # noqa: ARG001
-    from .models import fetch_speaker, fetch_whisper  # noqa: PLC0415
+    from .models import fetch_phones, fetch_speaker, fetch_whisper  # noqa: PLC0415
 
     root = Path(a.dir)
     if a.what in ("speaker", "all"):
         fetch_speaker(root)
     if a.what in ("whisper", "all"):
         fetch_whisper(a.whisper, root)
+    if a.what in ("phones", "all"):
+        fetch_phones(cfg.get("phones") or {}, root)
+
+
+def cmd_align(a, cfg, store):
+    from .phones.align import align_session  # noqa: PLC0415
+
+    for sid in a.session:
+        outs = align_session(store.dir(sid), runs=a.run, refs=a.ref, table_path=a.table or (cfg.get("phones") or {}).get("classes"))
+        if not outs:
+            print(f"{sid}: 整列するもの（音素つきの run と参照 run）が無い", file=sys.stderr)
+        for o in outs:
+            print(o)
 
 
 def cmd_netcheck(a, cfg, store):  # noqa: ARG001
@@ -180,10 +199,16 @@ def main(argv=None):
     sub.add_parser("sessions", help="セッション一覧").set_defaults(fn=cmd_sessions)
     sub.add_parser("devices", help="入力デバイス一覧").set_defaults(fn=cmd_devices)
     m = sub.add_parser("models", help="モデルを取得する（models/ に置く）")
-    m.add_argument("what", choices=["speaker", "whisper", "all"])
+    m.add_argument("what", choices=["speaker", "whisper", "phones", "all"])
     m.add_argument("--whisper", default="large-v3")
     m.add_argument("--dir", default="models")
     m.set_defaults(fn=cmd_models)
+    al = sub.add_parser("align", help="参照 run（ref / ref_g2p）と音素つき run を整列する")
+    al.add_argument("session", nargs="+")
+    al.add_argument("--run", nargs="*", help="音素つきの run（省略時はすべて）")
+    al.add_argument("--ref", nargs="*", help="参照 run（省略時はすべて）")
+    al.add_argument("--table", help="粗い音素クラスの表（省略時は intake/phones/classes.yaml）")
+    al.set_defaults(fn=cmd_align)
     sub.add_parser("netcheck", help="待ち受けが localhost だけか確かめる").set_defaults(fn=cmd_netcheck)
     v = sub.add_parser("view", help="閲覧画面")
     v.add_argument("--no-browser", action="store_true")
