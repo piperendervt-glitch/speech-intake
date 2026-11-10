@@ -36,7 +36,10 @@ class JsonlSink:
         f.write(json.dumps(obj, ensure_ascii=False) + "\n")
         f.flush()
 
-    def emit(self, utt: Utterance) -> None:
+    def event(self, msg: dict[str, Any]) -> None:  # noqa: ARG002
+        return None  # 通知は trace/events.jsonl に pipeline が書く
+
+    def emit(self, utt: Utterance, seg: int | None = None, timing: dict[str, float] | None = None) -> None:  # noqa: ARG002
         self._f.write(json.dumps(utt.to_dict(), ensure_ascii=False) + "\n")
         self._f.flush()
 

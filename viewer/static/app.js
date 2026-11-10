@@ -4,7 +4,7 @@
 const $ = (id) => document.getElementById(id);
 const css = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
 const SPK_COLORS = ["#e8590c", "#1c7ed6", "#2f9e44", "#ae3ec9", "#f59f00", "#0ca678", "#d6336c", "#5c7cfa"];
-const LANES = { wave: 110, spk: 28, text: 46, words: 38, phones: 34, ref: 34 };
+const LANES = { wave: 110, ev: 22, lag: 42, spk: 28, text: 46, words: 38, phones: 34, ref: 34 };
 const OP_LABEL = { match: "一致", sub: "置換", del: "脱落", ins: "挿入" };
 
 const S = {
@@ -99,6 +99,7 @@ async function loadRun(idx) {
 // 音素：認識器の音素の一覧と、選んだ参照（ref / ref_g2p）との整列結果を引きやすくしておく
 function prepRun(r) {
   if (!r) return r;
+  r.segs = prepEvents(r);
   r.isRef = !!(r.info && r.info.ref);
   r.phones = [];
   for (const u of r.utterances) for (const p of u.phones || []) r.phones.push({ ...p, utt: u.id, src: u.phones_source, model: u.phones_model });
@@ -111,6 +112,36 @@ function prepRun(r) {
   for (const row of r.align) for (const o of row.ops) if (o.hyp != null) r.hypOps.push(o);
   r.hypOps.sort((a, b) => a.t0 - b.t0);
   return r;
+}
+
+// 通知（trace/events.jsonl）を区間（seg）ごとにまとめる。
+// 印の位置は「通知を出した時刻」：実時間で流した run（mic / replay:realtime）は t_emit（壁時計を音声の時計に直したもの）、
+// fast の run は VAD が判定できた時刻 t_detect（壁時計の遅れは含まない）。utterance は speech_end の印 + (stt_done - vad_close)。
+function prepEvents(r) {
+  const rows = (r.trace && r.trace.events) || [];
+  if (!rows.length) return null;
+  const by = new Map();
+  const get = (k) => { if (!by.has(k)) by.set(k, { seg: k, utts: [] }); return by.get(k); };
+  for (const e of rows) {
+    if (e.seg == null) continue;
+    const g = get(e.seg);
+    if (e.type === "speech_start") g.start = e;
+    else if (e.type === "speech_end") g.end = e;
+    else if (e.type === "speech_dropped") g.drop = e;
+    else if (e.type === "utterance") g.utts.push(e);
+  }
+  const segs = [...by.values()].sort((a, b) => a.seg - b.seg);
+  for (const g of segs) {
+    if (g.start) g.startAt = g.start.t_emit != null ? g.start.t_emit : g.start.t_detect;
+    if (g.end) g.endAt = g.end.t_emit != null ? g.end.t_emit : g.end.t_detect;
+    const u = g.utts[0];
+    if (u) {
+      g.sttMs = (u.stt_done_unix - u.vad_close_unix) * 1000;
+      g.uttAt = u.t_emit != null ? u.t_emit : g.endAt != null ? g.endAt + (u.t_unix - u.vad_close_unix) : null;
+    }
+    if (g.drop) g.dropAt = g.drop.t_emit != null ? g.drop.t_emit : g.endAt;
+  }
+  return segs;
 }
 
 function opOfPhone(r, p) {
@@ -219,6 +250,10 @@ function fmtTime(t) {
 // ---------- panels ----------
 function panelLayout() {
   const L = [{ key: "wave", h: LANES.wave }];
+  if ($("tEv").checked && S.runs.some((r) => r && r.segs)) {
+    L.push({ key: "ev", h: LANES.ev });
+    if ($("tLag").checked) L.push({ key: "lag", h: LANES.lag });
+  }
   if ($("tSpk").checked) L.push({ key: "spk", h: LANES.spk });
   if ($("tText").checked) L.push({ key: "text", h: LANES.text });
   if ($("tWords").checked) L.push({ key: "words", h: LANES.words });
@@ -290,7 +325,33 @@ function buildTables() {
     t.appendChild(tb);
     d.appendChild(t);
     root.appendChild(d);
+    if (r.segs) root.appendChild(lagTable(r, idx));
   });
+}
+
+// 区間ごとの通知の遅れ（ms）。合否は決めず、数字を並べるだけ
+function lagTable(r, idx) {
+  const live = r.segs.some((g) => g.start && g.start.t_emit != null);
+  const d = document.createElement("details");
+  d.innerHTML = `<summary>${idx === 0 ? "A" : "B"}: ${esc(r.name)} の通知（区間 ${r.segs.length} 件・${live ? "実時間：壁時計の遅れを含む" : "fast：VAD の判定時刻だけ。壁時計の遅れは含まない"}）</summary>`;
+  const t = document.createElement("table");
+  t.innerHTML = "<thead><tr><th>seg</th><th>t</th><th>始まりの確定</th><th>終わりの確定</th><th>STT</th><th>結果</th></tr></thead>";
+  const tb = document.createElement("tbody");
+  const ms = (a, b) => (a != null && b != null ? Math.round((b - a) * 1000) : "");
+  for (const g of r.segs) {
+    const tr = document.createElement("tr");
+    tr.className = "utt";
+    const res = g.drop ? `捨てた（${esc(g.drop.reason)}）` : g.utts.map((u) => esc(u.id)).join(" ");
+    tr.innerHTML = `<td class="num">${g.seg}</td><td class="num">${g.start ? g.start.t.toFixed(2) : ""}</td>` +
+      `<td class="num">${g.start ? ms(g.start.t, g.startAt) : ""}</td><td class="num">${g.end && !g.end.dropped ? ms(g.end.t1, g.endAt) : ""}</td>` +
+      `<td class="num">${g.sttMs != null ? Math.round(g.sttMs) : ""}</td><td>${res}</td>`;
+    const t0 = g.start ? g.start.t : 0, t1 = g.end ? g.end.t1 : t0 + 1;
+    tr.onclick = () => { focusRange(t0, t1); playRange(t0, t1); };
+    tb.appendChild(tr);
+  }
+  t.appendChild(tb);
+  d.appendChild(t);
+  return d;
 }
 
 function focusRange(t0, t1) {
@@ -525,6 +586,8 @@ function drawPanel(cv, layout) {
         }
       }
     }
+    if (L.key === "ev") drawEvents(ctx, w, L, r, hits, layout);
+    if (L.key === "lag") drawLags(ctx, w, L, r, hits);
     if (L.key === "phones") drawPhones(ctx, w, L, r, hits);
     if (L.key === "ref") drawRefLane(ctx, w, L, r, hits);
   }
@@ -537,6 +600,58 @@ function drawPanel(cv, layout) {
   }
   drawPlayhead(ctx, w, h);
   cv._hits = hits;
+}
+
+// 通知の印：区間ごとに start（緑）・end（橙）・utterance（青）・捨てた（灰）。波形の段には start / end の位置に細い縦線
+function drawEvents(ctx, w, L, r, hits, layout) {
+  if (!r.segs) return;
+  const wave = layout.lanes.find((x) => x.key === "wave");
+  const mark = (t, color, kind, rec, shape) => {
+    if (t == null || !visible(t, t)) return;
+    const x = Math.round(tToX(t, w)) + 0.5;
+    ctx.strokeStyle = color;
+    ctx.globalAlpha = 0.55;
+    ctx.beginPath(); ctx.moveTo(x, wave.y); ctx.lineTo(x, wave.y + wave.h); ctx.stroke();
+    ctx.globalAlpha = 1;
+    ctx.fillStyle = color;
+    const yc = L.y + L.h / 2;
+    ctx.beginPath();
+    if (shape === "start") { ctx.moveTo(x, yc - 6); ctx.lineTo(x + 7, yc); ctx.lineTo(x, yc + 6); }
+    else if (shape === "end") { ctx.moveTo(x, yc - 6); ctx.lineTo(x - 7, yc); ctx.lineTo(x, yc + 6); }
+    else ctx.arc(x, yc, shape === "drop" ? 3 : 4, 0, Math.PI * 2);
+    ctx.fill();
+    hits.push({ x0: x - 5, x1: x + 5, y0: L.y, y1: L.y + L.h, t0: t, t1: t + 0.3, rec, kind });
+  };
+  for (const g of r.segs) {
+    mark(g.startAt, css("--ev-start"), `speech_start（seg ${g.seg}）`, g.start, "start");
+    mark(g.endAt, css("--ev-end"), `speech_end（seg ${g.seg}）`, g.end, "end");
+    if (g.uttAt != null) mark(g.uttAt, css("--ev-utt"), `utterance（seg ${g.seg}）`, g.utts, "utt");
+    if (g.drop) mark(g.dropAt, css("--ev-drop"), `speech_dropped（seg ${g.seg}）`, g.drop, "drop");
+  }
+}
+
+// 遅れの帯：上から 始まりの確定（話し始め t → speech_start）／終わりの確定（区間の終わり t1 → speech_end）／STT（speech_end → utterance）
+function drawLags(ctx, w, L, r, hits) {
+  if (!r.segs) return;
+  ctx.font = "10px ui-monospace, Consolas, monospace";
+  const bar = (a, b, row, color, kind, rec) => {
+    if (a == null || b == null || !visible(Math.min(a, b), Math.max(a, b))) return;
+    const x0 = tToX(Math.min(a, b), w), x1 = tToX(Math.max(a, b), w);
+    const y = L.y + 3 + row * 13;
+    ctx.fillStyle = color;
+    ctx.globalAlpha = 0.75;
+    ctx.fillRect(x0, y, Math.max(2, x1 - x0), 10);
+    ctx.globalAlpha = 1;
+    const ms = `${Math.round((b - a) * 1000)}ms`;
+    if (x1 - x0 > ctx.measureText(ms).width + 4) { ctx.fillStyle = "#fff"; ctx.fillText(ms, x0 + 2, y + 9); }
+    else { ctx.fillStyle = css("--fg"); ctx.fillText(ms, x1 + 3, y + 9); }
+    hits.push({ x0, x1: Math.max(x0 + 2, x1), y0: y, y1: y + 10, t0: Math.min(a, b), t1: Math.max(a, b), rec: { ...rec, ms: Math.round((b - a) * 1000) }, kind });
+  };
+  for (const g of r.segs) {
+    if (g.start) bar(g.start.t, g.startAt, 0, css("--ev-start"), `始まりの確定まで（seg ${g.seg}）`, { seg: g.seg, from: "t（話し始め）", to: "speech_start" });
+    if (g.end && !g.end.dropped) bar(g.end.t1, g.endAt, 1, css("--ev-end"), `終わりの確定まで（seg ${g.seg}）`, { seg: g.seg, from: "t1（区間の終わり・余白込み）", to: "speech_end" });
+    if (g.uttAt != null) bar(g.endAt, g.uttAt, 2, css("--ev-utt"), `speech_end → utterance（seg ${g.seg}）`, { seg: g.seg, stt_ms: Math.round(g.sttMs) });
+  }
 }
 
 const PAD = 0.15; // 音素をクリックしたときに前後に足して再生する秒
@@ -801,7 +916,7 @@ $("tPhones").onchange = () => { buildPanels(); };
 $("runA").onchange = async () => { await loadRun(0); indexSpeakers(); updateUrl(); buildPanels(); setStatus(statusText()); };
 $("runB").onchange = async () => { await loadRun(1); indexSpeakers(); updateUrl(); buildPanels(); setStatus(statusText()); };
 $("reload").onclick = async () => { await loadSessions(true); await openSession($("session").value, false); };
-for (const id of ["tVad", "tText", "tWords", "tSpk", "tWordP"]) $(id).onchange = () => { buildTables(); drawAll(); };
+for (const id of ["tVad", "tText", "tWords", "tSpk", "tWordP", "tEv", "tLag"]) $(id).onchange = () => { buildTables(); drawAll(); };
 $("zoomIn").onclick = () => zoomAt(0.5);
 $("zoomOut").onclick = () => zoomAt(2);
 $("zoomFit").onclick = () => { fitView(); drawAll(); };

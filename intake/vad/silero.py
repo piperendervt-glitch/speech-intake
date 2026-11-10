@@ -32,6 +32,13 @@ class SileroVad:
     speech_pad_ms   区間の前後に足す余白（STT が語頭・語尾を落とさないように）
     max_speech_s    これを超えたら区間を切る（Whisper の 30 秒窓に収めるため）
     keep_prob       枠ごとの確率を trace/vad_prob.jsonl に書く（閲覧画面で確率の曲線を出す）
+    start_frames    threshold 以上の枠がこの数だけ続いたら「始まり」と確定する（1 枠 = 32 ms。既定 1 は段2〜9 と同じ挙動）。
+                    確定した時点で drain_events() に speech_start が入る。届かずに途切れた候補は trace/vad_cand.jsonl に残す
+
+    drain_events() は区間の始まり・終わりの通知（段10）を時刻順に返す：
+      {"type": "speech_start", "seg", "t", "t_detect", "p"}     t = 始まりの枠の先頭、t_detect = 確定した枠の終わり（セッション秒）
+      {"type": "speech_end", "seg", "t0", "t1", "t_detect"}     t0/t1 = 余白込みの区間（feed が返す VadSegment と同じ）
+      {"type": "speech_dropped", "seg", "reason": "vad_short"}  min_speech_ms に届かず区間を捨てたとき（speech_end の直後）
     """
 
     def __init__(
@@ -45,6 +52,7 @@ class SileroVad:
         model_path: str | None = None,
         keep_prob: bool = True,
         num_threads: int = 1,
+        start_frames: int = 1,
     ):
         import onnxruntime as ort  # noqa: PLC0415
 
@@ -61,6 +69,7 @@ class SileroVad:
         self.pad = speech_pad_ms / 1000
         self.max_speech = max_speech_s
         self.keep_prob = keep_prob
+        self.start_frames = max(1, int(start_frames))
         self.sr = 16000
         self.reset()
 
@@ -74,6 +83,10 @@ class SileroVad:
         self._probs: list[float] = []
         self._prev_end = 0.0
         self._trace: list[tuple[str, dict]] = []
+        self._events: list[dict] = []
+        self._seg = 0  # 確定した区間の数（次の通し番号）
+        self._cand: float | None = None  # 始まりの候補（threshold 以上の枠が続いている先頭）
+        self._cand_probs: list[float] = []
 
     def prob(self, frame: np.ndarray) -> float:
         x = np.concatenate([self._ctx, frame])[None, :].astype(np.float32)
@@ -81,13 +94,27 @@ class SileroVad:
         self._ctx = x[0, -CONTEXT:]
         return float(out[0, 0])
 
-    def _close(self, end: float, out: list[VadSegment]) -> None:
+    def _open(self, t: float, probs: list[float], now: float) -> None:
+        self._start, self._probs = t, probs
+        self._events.append({"type": "speech_start", "seg": self._seg, "t": round(t, 3), "t_detect": round(now, 3),
+                             "p": round(float(np.mean(probs)), 3)})
+
+    def _close(self, end: float, out: list[VadSegment], now: float, limit: float | None = None) -> None:
         start = max(self._start - self.pad, self._prev_end, 0.0)
         end = end + self.pad
-        if end - start - 2 * self.pad >= self.min_speech:
+        keep = end - start - 2 * self.pad >= self.min_speech
+        if limit is not None:  # 余白が音声の終わりを越えないように（長さの判定は越えた分も含めて段2〜9 と同じ）
+            end = min(end, limit)
+        ev = {"type": "speech_end", "seg": self._seg, "t0": round(start, 3), "t1": round(end, 3), "t_detect": round(now, 3)}
+        if keep:
             p = float(np.mean(self._probs)) if self._probs else None
-            out.append(VadSegment(t0=start, t1=end, vad=self.name, p=p))
+            out.append(VadSegment(t0=start, t1=end, vad=self.name, p=p, seg=self._seg))
             self._prev_end = end
+            self._events.append(ev)
+        else:
+            self._events.append({**ev, "dropped": "vad_short"})
+            self._events.append({"type": "speech_dropped", "seg": self._seg, "reason": "vad_short"})
+        self._seg += 1
         self._start = None
         self._temp_end = None
         self._probs = []
@@ -106,10 +133,18 @@ class SileroVad:
             i += FRAME
             if self.keep_prob:
                 self._trace.append(("vad_prob", {"t": round(t, 3), "p": round(p, 3)}))
+            now = t + FRAME / self.sr  # この枠の終わり＝判定できた時刻
             if self._start is None:
                 if p >= self.thr:
-                    self._start = t
-                    self._probs = [p]
+                    if self._cand is None:
+                        self._cand, self._cand_probs = t, []
+                    self._cand_probs.append(p)
+                    if len(self._cand_probs) >= self.start_frames:
+                        self._open(self._cand, self._cand_probs, now)
+                        self._cand = None
+                elif self._cand is not None:  # 始まりに届かなかった短い山（雑音など）
+                    self._trace.append(("vad_cand", {"t0": round(self._cand, 3), "t1": round(t, 3), "frames": len(self._cand_probs)}))
+                    self._cand = None
                 continue
             self._probs.append(p)
             if p >= self.thr:
@@ -117,26 +152,29 @@ class SileroVad:
             elif p < self.neg:
                 if self._temp_end is None:
                     self._temp_end = t
-                if t + FRAME / self.sr - self._temp_end >= self.min_silence:
-                    self._close(self._temp_end, out)
+                if now - self._temp_end >= self.min_silence:
+                    self._close(self._temp_end, out, now)
                     continue
-            if t + FRAME / self.sr - self._start >= self.max_speech:
-                cut = self._temp_end if self._temp_end is not None else t + FRAME / self.sr
-                self._close(cut - self.pad, out)  # 切れ目に余白は足さない
-                if p >= self.thr:
-                    self._start, self._probs = t, [p]
+            if now - self._start >= self.max_speech:
+                cut = self._temp_end if self._temp_end is not None else now
+                self._close(cut - self.pad, out, now)  # 切れ目に余白は足さない
+                if p >= self.thr:  # 話し続けているので、続きはすぐ次の区間として始める
+                    self._open(t, [p], now)
         self._pending = buf[i:].copy()
         return out
 
     def flush(self) -> list[VadSegment]:
         out: list[VadSegment] = []
+        now = (self._pos + len(self._pending)) / self.sr
         if self._start is not None:
             end = self._temp_end if self._temp_end is not None else self._pos / self.sr
-            self._close(end, out)
-            # 余白が音声の終わりを越えないように
-            if out:
-                out[-1].t1 = min(out[-1].t1, (self._pos + len(self._pending)) / self.sr)
+            self._close(end, out, now, limit=now)
+        self._cand = None
         return out
+
+    def drain_events(self) -> list[dict]:
+        e, self._events = self._events, []
+        return e
 
     def drain_trace(self) -> list[tuple[str, dict]]:
         t, self._trace = self._trace, []

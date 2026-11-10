@@ -23,6 +23,9 @@
     <label><input type="checkbox" id="tWords"> 単語時刻</label>
     <label><input type="checkbox" id="tSpk" checked> 話者の色分け</label>
     <label title="単語の確率 p が低いほど濃く塗る（単語時刻の表示中）"><input type="checkbox" id="tWordP"> 単語の p を濃淡で</label>
+    <label title="speech_start（緑）・speech_end（橙）・utterance（青）を配信した時刻の印（trace/events.jsonl。段10）"><input type="checkbox" id="tEv" checked> 通知</label>
+    <label title="区間ごとの遅れを帯の長さで：始まりの確定（話し始め→speech_start）／終わりの確定（区間の終わり→speech_end）／STT（speech_end→utterance）"><input type="checkbox" id="tLag"> 遅れを帯で</label>
+    <span class="legend"><i class="ev-start"></i>始まり <i class="ev-end"></i>終わり <i class="ev-utt"></i>utterance <i class="ev-drop"></i>捨てた</span>
   </div>
   <div class="row">
     <label title="音素認識器の音素（時刻つき）と、参照の音素（整列後の位置）"><input type="checkbox" id="tPhones" checked> 音素</label>

@@ -94,3 +94,20 @@ def test_non_local_host_refused():
     c["viewer"]["host"] = "0.0.0.0"
     with pytest.raises(ValueError):
         check_local_only(c)
+
+
+def test_cli_record_creates_session_before_run(tmp_path, monkeypatch, capsys):
+    """record は run の出力より先にセッションを作る（段10 で見つかった FileExistsError の再発防止）。"""
+    import types
+
+    import intake.capture.mic as mic
+
+    sig = tone_bursts(total=1.0)
+    monkeypatch.setattr(mic, "_sd", lambda: types.SimpleNamespace(InputStream=lambda **kw: FakeStream(signal=sig, **kw)))
+    cfgp = tmp_path / "c.yaml"
+    cfgp.write_text(f"sessions_dir: {tmp_path / 's'}\n", encoding="utf-8")
+    main(["-c", str(cfgp), "record", "--seconds", "0.5", "--session", "20261110_000000", "--run", "r1"])
+    out = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+    assert out["session"] == "20261110_000000" and out["chunks"] > 0
+    d = tmp_path / "s" / "20261110_000000"
+    assert (d / "audio.wav").exists() and (d / "runs" / "r1" / "run.json").exists()

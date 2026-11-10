@@ -1,0 +1,50 @@
+# 段10：ライブ会話向け＋音素（live.yaml に phones を足したもの）。音素は保存だけしたい利用者向け。
+# 音素の分だけ utterance が遅れる（speech_start / speech_end は変わらない）。遅れの実測は REPORT_段10。
+# 先に：pip install -e .[phones]（torch は GPU 版を別に。README）
+#   python -m intake -c config/live_phones.yaml record          … マイクから
+#   python -m intake -c config/live_phones.yaml replay SESSION --speed realtime   … 録音の流し直しで同じ通知を再現
+#   python tools/subscribe.py --events                  … 購読側（speech_start / speech_end / utterance）
+# 話者分離なし。音素は英語の観察向けなので stt.language は en にしてある。ヘッドホン前提（スピーカーの音の回り込みは除かない）。
+run_name: live_phones
+
+capture:
+  block_ms: 32             # マイクから 1 回に受け取る長さ。16 にすると始まりの通知が平均 8 ms ほど早まる見込み（REPORT_段10）
+  latency: low             # PortAudio に頼む入力の遅れ（low / high / 秒）
+
+replay:
+  speed: realtime          # 流し直しも実時間で（ライブと同じ間隔で通知が出る）
+  chunk_ms: 32             # capture.block_ms と同じにしておくと、届き方もマイクと同じになる
+
+pipeline:
+  stt_thread: true         # STT を別スレッドで。STT の最中に話し始めても speech_start は待たされない
+
+vad:
+  provider: silero
+  threshold: 0.5
+  start_frames: 2          # threshold 以上の枠（32 ms）がこの数続いたら speech_start。1 は段2〜9 と同じ（雑音で出やすい）
+  min_silence_ms: 300      # 黙ってからこの長さで speech_end。短いと 1 文が細切れ、長いと返答が遅れる
+  min_speech_ms: 250
+  speech_pad_ms: 100
+  max_speech_s: 28
+
+stt:
+  provider: faster_whisper
+  model: large-v3-turbo    # GPU が無い・足りないときは small
+  device: auto
+  language: en             # ja / en / null（自動判定。短い相槌で外れやすく、少し遅くなる）
+  beam_size: 1             # 速さ優先（large-v3 の段3〜9 は 5）
+  one_per_vad: true        # VAD 区間 1 つにつき発話レコードは多くて 1 つ（turn-bench で対応を取りやすく）
+
+speaker:
+  provider: none
+phones:
+  provider: wav2vec2_espeak
+  model: facebook/wav2vec2-lv-60-espeak-cv-ft
+  device: auto
+
+sink:
+  jsonl: true
+  websocket:
+    enabled: true
+    host: 127.0.0.1
+    port: 8766

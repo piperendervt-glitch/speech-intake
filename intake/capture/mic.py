@@ -35,6 +35,9 @@ class MicCapture:
 
     時刻は「書いたサンプル数 / sample_rate」だけで決める（壁時計は使わない）。
     stream_factory はテスト用の差し込み口（sounddevice.InputStream と同じ引数を受ける）。
+    block_ms  1 回に受け取る音声の長さ。短いほど VAD に早く届く（段10。VAD の枠は 32 ms なので、それより短くしても
+              確定が早まるのは枠の切れ目との差の分だけ）
+    latency   PortAudio に頼む入力の遅れ（"low" / "high" / 秒。None は sounddevice の既定 = "high"）
     """
 
     def __init__(
@@ -44,6 +47,7 @@ class MicCapture:
         sample_rate: int = 16000,
         device: int | str | None = None,
         block_ms: int = 32,
+        latency: str | float | None = None,
         stream_factory=None,
         flush_every_s: float = 1.0,
     ):
@@ -52,6 +56,7 @@ class MicCapture:
         self.sample_rate = sample_rate
         self.device = device
         self.blocksize = int(sample_rate * block_ms / 1000)
+        self.latency = latency
         self._stream_factory = stream_factory
         self._q: queue.Queue[np.ndarray | None] = queue.Queue()
         self._stop = threading.Event()
@@ -59,6 +64,8 @@ class MicCapture:
         self.overflows = 0
         self.samples_written = 0
         self.t0_unix: float | None = None
+        self._prepared = False
+        self.max_samples: int | None = None  # これだけ録ったら止める（record --seconds）
 
     def stop(self) -> None:
         self._stop.set()
@@ -71,8 +78,10 @@ class MicCapture:
             self.t0_unix = time.time() - frames / self.sample_rate
         self._q.put(np.array(indata[:, 0], dtype=np.float32, copy=True))
 
-    def chunks(self) -> Iterator[AudioChunk]:
-        factory = self._stream_factory or _sd().InputStream
+    def prepare(self) -> None:
+        """セッションを作る。run の出力（runs/<run>/）を置く前に呼ぶ（record はこの順。段10 で直した）。"""
+        if self._prepared:
+            return
         self.store.create(
             self.session,
             {
@@ -83,6 +92,11 @@ class MicCapture:
                 "status": "recording",
             },
         )
+        self._prepared = True
+
+    def chunks(self) -> Iterator[AudioChunk]:
+        factory = self._stream_factory or _sd().InputStream
+        self.prepare()
         path = self.store.audio_path(self.session)
         last_flush = time.monotonic()
         with sf.SoundFile(path, "w", samplerate=self.sample_rate, channels=1, subtype="PCM_16") as wav:
@@ -93,9 +107,13 @@ class MicCapture:
                 blocksize=self.blocksize,
                 device=self.device,
                 callback=self._callback,
+                **({"latency": self.latency} if self.latency is not None else {}),
             )
             try:
                 with stream:
+                    lat = getattr(stream, "latency", None)  # PortAudio が見積もった入力の遅れ（秒）
+                    if isinstance(lat, (int, float)):
+                        self.store.update_meta(self.session, input_latency_s=round(float(lat), 4), block_ms=round(self.blocksize / self.sample_rate * 1000, 1))
                     while not self._stop.is_set():
                         try:
                             block = self._q.get(timeout=0.1)
@@ -110,6 +128,8 @@ class MicCapture:
                             wav.flush()  # ヘッダを更新し、録音中でも閲覧画面から読めるようにする
                             last_flush = time.monotonic()
                         yield AudioChunk(t0=t0, samples=block, sample_rate=self.sample_rate)
+                        if self.max_samples is not None and self.samples_written >= self.max_samples:
+                            self.stop()
                     # 止めた後に残ったブロックも保存する
                     while not self._q.empty():
                         block = self._q.get_nowait()

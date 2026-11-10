@@ -144,11 +144,14 @@ class VadSegment:
     t1: float
     vad: str
     p: float | None = None
+    seg: int | None = None  # 区間の通し番号（配信の speech_start / speech_end / utterance と対応を取るため）
 
     def to_dict(self) -> dict[str, Any]:
         d = {"t0": round(self.t0, 3), "t1": round(self.t1, 3), "vad": self.vad}
         if self.p is not None:
             d["p"] = round(self.p, 3)
+        if self.seg is not None:
+            d["seg"] = self.seg
         return d
 
 
