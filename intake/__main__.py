@@ -84,6 +84,7 @@ def cmd_record(a, cfg, store):
         dev = int(dev)
     cap = MicCapture(store, sid, sample_rate=cfg["sample_rate"], device=dev, block_ms=cfg["capture"]["block_ms"],
                      latency=cfg["capture"].get("latency"))
+    cap.prepare()  # run の出力（runs/<run>/）より先にセッションを作る
     signal.signal(signal.SIGINT, lambda *_: cap.stop())
     if a.seconds:
         threading.Timer(a.seconds, cap.stop).start()

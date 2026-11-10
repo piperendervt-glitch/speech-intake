@@ -64,6 +64,7 @@ class MicCapture:
         self.overflows = 0
         self.samples_written = 0
         self.t0_unix: float | None = None
+        self._prepared = False
 
     def stop(self) -> None:
         self._stop.set()
@@ -76,8 +77,10 @@ class MicCapture:
             self.t0_unix = time.time() - frames / self.sample_rate
         self._q.put(np.array(indata[:, 0], dtype=np.float32, copy=True))
 
-    def chunks(self) -> Iterator[AudioChunk]:
-        factory = self._stream_factory or _sd().InputStream
+    def prepare(self) -> None:
+        """セッションを作る。run の出力（runs/<run>/）を置く前に呼ぶ（record はこの順。段10 で直した）。"""
+        if self._prepared:
+            return
         self.store.create(
             self.session,
             {
@@ -88,6 +91,11 @@ class MicCapture:
                 "status": "recording",
             },
         )
+        self._prepared = True
+
+    def chunks(self) -> Iterator[AudioChunk]:
+        factory = self._stream_factory or _sd().InputStream
+        self.prepare()
         path = self.store.audio_path(self.session)
         last_flush = time.monotonic()
         with sf.SoundFile(path, "w", samplerate=self.sample_rate, channels=1, subtype="PCM_16") as wav:
