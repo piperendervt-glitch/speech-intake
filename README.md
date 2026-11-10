@@ -31,7 +31,8 @@ python -m intake netcheck                # 待ち受けが localhost だけか�
 ```
 
 設定は YAML 1 つ。用意してある設定：`config/default.yaml`（何もしない）、`silero.yaml`（VAD のみ）、
-`whisper.yaml`（VAD+STT）、`full.yaml`（VAD+STT+話者分離）、`stream.yaml`（full+WebSocket 配信）。各段の `provider` 名で実装を差し替える。
+`whisper.yaml`（VAD+STT）、`full.yaml`（VAD+STT+話者分離）、`stream.yaml`（full+WebSocket 配信）、
+`live.yaml`（ライブ会話向け、段10）・`live_phones.yaml`（live＋音素）。各段の `provider` 名で実装を差し替える。
 手元専用の設定は `config/local*.yaml` に置くと git に入らない。
 
 ## 置き場所
@@ -83,6 +84,21 @@ python tools/align_report.py --run phones --ref ref --corpus saa   # 群（japan
 ```
 
 粗い音素クラスの表は `intake/phones/classes.yaml`（41 クラス、直してよい）。利用側への申し送りは `docs/INTEGRATION_JA.md` §4。
+
+## ライブ会話向けの通知（段10）
+
+発話が始まった時点で `speech_start`、区間が閉じた時点で `speech_end` を STT を待たずに WebSocket で配る（turn-bench 向け）。
+判断（割り込む・相槌など）はしない。ヘッドホン前提。
+
+```bash
+python -m intake -c config/live.yaml record                              # VAD + large-v3-turbo、話者分離・音素なし
+python tools/subscribe.py --events                                       # speech_start / speech_end / utterance を時刻つきで
+python -m intake -c config/live.yaml replay <session> --speed realtime   # 同じ通知を録音の流し直しで再現
+python tools/live_latency.py <session> --run live                        # 区間ごとの遅れ
+python -m intake view    # 「通知」「遅れを帯で」をオン
+```
+
+メッセージの順序と `seg` での対応付けは `docs/INTEGRATION_JA.md` §5。
 
 ## 段ごとの報告
 

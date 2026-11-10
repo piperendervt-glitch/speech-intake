@@ -5,6 +5,8 @@
   python tools/subscribe.py --trace             # VAD 区間・話者分離の区間も受け取る
   python tools/subscribe.py --out records.jsonl # 受け取った発話レコードをファイルにも書く（revise は置き換え）
 
+speech-intake がまだ起動していない・止まったときは、1 秒ごとに繋ぎ直す（Ctrl+C で終わる）。
+
 --events の各行の先頭は受け取った時刻（壁時計）。+ms は、その通知を speech-intake が出した時刻（t_unix）から
 受け取るまでの遅れ（同じ PC なら 1 ms 前後）。utterance の行には、区間が閉じてから STT が終わるまでの時間も出す。
 """
@@ -24,9 +26,23 @@ def stamp(now: float, sent: float | None) -> str:
 
 
 async def main(url: str, trace: bool, out: str | None, events: bool) -> None:
+    waiting = False
+    while True:
+        try:
+            await subscribe(url, trace, out, events)
+            waiting = False
+        except aiohttp.ClientConnectionError:
+            if not waiting:
+                print(f"# {url} に繋がらない。待っている…", flush=True)
+                waiting = True
+        await asyncio.sleep(1)
+
+
+async def subscribe(url: str, trace: bool, out: str | None, events: bool) -> None:
     records: dict[str, dict] = {}
     async with aiohttp.ClientSession() as cs:
         async with cs.ws_connect(url + ("?trace=1" if trace else "")) as ws:
+            print(f"# 接続 {url}", flush=True)
             async for msg in ws:
                 now = time.time()
                 m = json.loads(msg.data)
@@ -44,7 +60,7 @@ async def main(url: str, trace: bool, out: str | None, events: bool) -> None:
                         body = f"seg={m['seg']:<4} {m['t0']:8.2f}-{m['t1']:8.2f}  確定 {m['t_detect']:8.2f}" + (f"  捨てた: {m['dropped']}" if m.get("dropped") else "")
                     else:
                         body = f"seg={m['seg']:<4} {m['reason']}"
-                    print(f"{stamp(now, m.get('t_unix'))} {t:<14} {body}")
+                    print(f"{stamp(now, m.get('t_unix'))} {t:<14} {body}", flush=True)
                 elif t == "utterance":
                     r = m["record"]
                     records[r["id"]] = r
@@ -53,7 +69,7 @@ async def main(url: str, trace: bool, out: str | None, events: bool) -> None:
                         tm = m.get("timing") or {}
                         stt = f"  STT {(tm['stt_done_unix'] - tm['vad_close_unix']) * 1000:.0f}ms" if tm else ""
                         line = f"{stamp(now, tm.get('stt_done_unix'))} {'utterance':<14} seg={m.get('seg', '-')!s:<4}{stt}  {line}"
-                    print(line)
+                    print(line, flush=True)
                 elif t == "revise":
                     records = {r["id"]: r for r in m["records"]}
                     print(f"# revise: {len(records)} 件を付け直し（話者など）")

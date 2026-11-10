@@ -1,4 +1,4 @@
-# 利用側への申し送り（speech-intake v0.2）
+# 利用側への申し送り（speech-intake v0.2、段10 の通知つき）
 
 speech-intake が出すのは**観察表**（発話レコードの列）だけ。解釈・要約・文脈判定などの推察は、各プロジェクトが
 **推察表**として別ファイルに書く。推察表の各行は、根拠にした発話レコードの id を `refs` で**必ず**参照する。
@@ -40,6 +40,7 @@ speech-intake が出すのは**観察表**（発話レコードの列）だけ�
    | `hello` | `info`（session, run, providers, 設定） | 手元の発話レコードを空にする（新しい run の始まり） |
    | `utterance` | `record`（発話レコード 1 つ） | id をキーに保存 |
    | `revise` | `records`（その run の全発話レコード） | **全部置き換える**。話者分離（acoustic）は録音を止めた時点でまとめて話者を付けるので、ライブ中の `speaker` は空で、最後に revise が届く |
+   | `speech_start` / `speech_end` / `speech_dropped` | 発話の始まり・終わりの通知（段10、§5） | 使わなければ読み飛ばしてよい |
    | `trace` | `stage`（`vad` / `speaker`）, `row` | `?trace=1` で接続したときだけ届く。確認用 |
    | `end` | `stats` | 入力の終わり |
 
@@ -214,3 +215,85 @@ Common Voice は要アカウントのため見送り。SAA（日本語話者 44 
 - **誤りではない差が混ざる**：米語の弾き音（letter の t → `DX`）、G2P の読み（文脈の読み分けは品詞まで）、人間の転写者の流儀。
 - **使い方の勧め**：差の数をそのまま点数にしない。同じ文を英語母語の話者が読んだときにも多い対かどうか（閲覧画面の「群の集計」、
   `tools/align_report.py`）で、学習者に特有の差かを見分ける。人間の IPA との一致率は wav2vec2 で日本語話者 77.6%・英語母語 86.6%。
+
+---
+
+## 5. turn-bench（ライブ会話）
+
+turn-bench は「ユーザーが話し始めたら AI が黙る」を作るために、発話が**始まった時点**の通知を使う。
+speech-intake は「始まった／終わった」という観察を配るだけで、割り込む・相槌とみなす・ターンが終わったとみなす、
+といった**判断はしない**（turn-bench の推察）。
+
+```bash
+python -m intake -c config/live.yaml record                               # マイクから（Ctrl+C で止める）
+python -m intake -c config/live.yaml replay <session> --speed realtime    # 録音を流し直して同じ通知を再現（試験用）
+python tools/subscribe.py --events                                        # 通知を時刻つきで表示する購読の例
+python tools/live_latency.py <session> --run live                         # 区間ごとの遅れの内訳
+```
+
+**ヘッドホン前提**。スピーカーから出した AI の声がマイクに回り込むと、それも発話として `speech_start` が出る
+（エコーキャンセルはしていない）。
+
+### 5.1 メッセージ
+
+| type | 中身 | いつ |
+|---|---|---|
+| `speech_start` | `seg`, `t`, `t_detect`, `t_unix`, `p` | VAD が発話の始まりを確定した時点。STT を待たない |
+| `speech_end` | `seg`, `t0`, `t1`, `t_detect`, `t_unix`（捨てた区間は `dropped: "vad_short"` つき） | VAD が区間を閉じた時点。STT を待たない |
+| `speech_dropped` | `seg`, `reason`, `t_unix` | その区間から発話レコードが出ないと決まった時点 |
+| `utterance` | `record`, `seg`, `timing: {vad_close_unix, stt_done_unix}` | STT が終わった時点（`seg` と `timing` は段10 で足した。`record` の形は変わらない） |
+
+- `t`, `t0`, `t1`, `t_detect` はセッション秒（音声の時計）。`t` は threshold を越えた最初の枠（32 ms）の先頭、
+  `t_detect` は確定できた枠の終わり。`speech_end` の `t0`/`t1` は前後に余白（`speech_pad_ms`）を足した区間で、
+  STT に渡す音声・`trace/vad.jsonl` の区間と同じ。
+- `t_unix` は speech-intake がその通知を出した壁時計（UNIX 秒）。同じ PC の購読側なら、受け取った時刻との差は 1 ms 前後。
+- `p` は始まりを確定するまでの枠の確率の平均（Silero の出力をそのまま）。
+
+### 5.2 順序と `seg` での対応付け
+
+1 つの区間（`seg`）について、必ず次の順で届く：
+
+```
+speech_start(seg) → speech_end(seg) → utterance(seg) を 1 つ以上  または  speech_dropped(seg)
+```
+
+- `seg` は run の中の区間の通し番号（0 から）。**発話レコードの欄ではない**（`record` の中には無い）。
+  発話レコードの `id`（`utt_000123`）とは別の番号で、1 つの区間から発話が出ないこともあるので、両者はずれていく。
+- 1 つの区間が**複数の `utterance` に分かれる**ことがある（`stt.one_per_vad: false` のとき、Whisper の文区切りごと）。
+  `config/live.yaml` は `one_per_vad: true` なので多くて 1 つ。
+- 区間が**空になる**ことがある。そのときは `utterance` の代わりに `speech_dropped` が届く。
+  `reason` は `vad_short`（`min_speech_ms` に届かず VAD が捨てた。`speech_end` の直後）か
+  `stt_empty`（STT が何も返さなかった。雑音・咳・短すぎる相槌など）。
+- 区間をまたいだ順序：`pipeline.stt_thread: true`（live.yaml）では STT が別スレッドなので、
+  次の区間の `speech_start` が前の区間の `utterance` より**先に**届くことがある。`seg` で突き合わせる。
+- 長く話し続けると `vad.max_speech_s`（28 秒）で区間が切られ、`speech_end(n)` の直後に `speech_start(n+1)` が届く
+  （話は途切れていない）。
+- 途中から接続した購読者には、それまでの `utterance` だけが再送される（過去の `speech_start` などは再送しない）。
+
+### 5.3 `timing` の読み方
+
+`utterance` の `timing` は、時間軸に遅れを並べるための壁時計（UNIX 秒）：
+
+| 欄 | 意味 |
+|---|---|
+| `vad_close_unix` | `speech_end` を出した時刻（= その `speech_end` の `t_unix`） |
+| `stt_done_unix` | STT が終わった時刻 |
+| `phones_done_unix` | 音素認識が終わった時刻（`live_phones.yaml` のときだけ） |
+
+`stt_done_unix - vad_close_unix` が「黙ってから文字が出るまで」のうち STT の分。黙ってから `speech_end` までは
+`min_silence_ms`（live.yaml は 300 ms）＋枠の待ちで決まる。閲覧画面で「通知」「遅れを帯で」をオンにすると、
+区間ごとの遅れが帯の長さで見える。数字は `tools/live_latency.py` で。実測は `docs/REPORT_段10.md`。
+
+### 5.4 設定で変えられるもの
+
+| 設定 | live.yaml | 効き方 |
+|---|---|---|
+| `vad.start_frames` | 2 | threshold 以上の枠がいくつ続いたら始まりとするか。1 枠 32 ms。大きいほど短い雑音で出にくく、確定が遅い |
+| `vad.min_silence_ms` | 300 | 黙ってから `speech_end` までの長さ。短いと 1 文が細切れになる |
+| `vad.threshold` | 0.5 | 発話とみなす確率 |
+| `stt.model` | large-v3-turbo | GPU が無いなら small |
+| `stt.language` | ja | `en` / `ja` / `null`（自動判定） |
+| `capture.block_ms` | 32 | マイクから 1 回に受け取る長さ |
+| `pipeline.stt_thread` | true | STT を別スレッドで（STT の最中も始まりの通知が止まらない） |
+
+コマンドラインで `--set vad.start_frames=3` のように上書きできる。
